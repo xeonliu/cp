@@ -111,6 +111,20 @@ class ImportWorker(QObject):
         super().__init__()
         self.is_running = True
     
+    def hash_file(self, file_path, block_size=65536):
+        """计算文件的MD5哈希值"""
+        import hashlib
+        hasher = hashlib.md5()
+        try:
+            with open(file_path, 'rb') as f:
+                buf = f.read(block_size)
+                while len(buf) > 0:
+                    hasher.update(buf)
+                    buf = f.read(block_size)
+            return hasher.hexdigest()
+        except:
+            return None
+    
     def import_files(self, file_list, target_path, mode, organize_by_date, date_format=None, time_source=None, custom_template=None):
         """
         mode: 'copy', 'move', 'add', 'dng'
@@ -143,10 +157,21 @@ class ImportWorker(QObject):
                 filename = os.path.basename(file_path)
                 dest_file = os.path.join(dest_dir, filename)
                 
-                # 处理文件重名
+                # 检测文件重复（仅当目标文件已存在时）
                 if os.path.exists(dest_file):
-                    base, ext = os.path.splitext(filename)
-                    dest_file = os.path.join(dest_dir, f"{base}_copy{ext}")
+                    # 比对哈希值
+                    src_hash = self.hash_file(file_path)
+                    dst_hash = self.hash_file(dest_file)
+                    
+                    if src_hash and dst_hash and src_hash == dst_hash:
+                        # 文件完全相同，跳过导入
+                        print(f"Skip duplicate file: {file_path}")
+                        self.progress.emit(idx + 1, total)
+                        continue
+                    else:
+                        # 文件不同，添加后缀避免覆盖
+                        base, ext = os.path.splitext(filename)
+                        dest_file = os.path.join(dest_dir, f"{base}_copy{ext}")
                 
                 if mode == 'move':
                     shutil.move(file_path, dest_file)
@@ -283,6 +308,7 @@ class LightroomImport(QMainWindow):
         self.time_source = 'file_mtime'
         self.custom_template = ''
         self.updating_tree = False  # 防止递归更新
+        self.duplicate_files = set()  # 存储重复文件的路径
         
         # 初始化 UI
         self.setup_ui()
@@ -604,9 +630,10 @@ class LightroomImport(QMainWindow):
         # 停止旧任务
         self.worker.stop()
         
-        self.grid_list.clear()
+        self.grid_list.clear() # 这会触发 itemChanged 信号
         self.current_files = []
         self.selected_items.clear()
+        self.duplicate_files.clear()
         self.update_preview(None)
         
         valid_extensions = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.nef', '.dng', '.mp4', '.mov'}
@@ -635,10 +662,45 @@ class LightroomImport(QMainWindow):
             # 启动线程加载真实缩略图
             if self.current_files:
                 self.request_load.emit(self.current_files)
-                self.status_label.setText(f"已加载 {len(self.current_files)} 个文件")
+                # 加载后立即执行一次重复文件检测并隐藏
+                self.update_grid_filter()
                 
         except PermissionError:
             self.status_label.setText("无权限访问该文件夹")
+
+    def update_grid_filter(self):
+        """根据当前设置隐藏重复文件"""
+        if not self.target_directory:
+            return
+
+        self.updating_tree = True # 借用该标志防止递归刷新
+        self.duplicate_files.clear()
+        
+        for i in range(self.grid_list.count()):
+            item = self.grid_list.item(i)
+            file_path = item.data(Qt.ItemDataRole.UserRole)
+            
+            is_duplicate = False
+            if self.organize_checkbox.isChecked():
+                # 计算目标路径
+                path_str = self.get_path_from_file(file_path, use_template=bool(self.custom_template))
+                target_full_path = os.path.join(self.target_directory, path_str)
+                dest_file = os.path.join(target_full_path, os.path.basename(file_path))
+                
+                if os.path.exists(dest_file) and self.files_are_identical(file_path, dest_file):
+                    is_duplicate = True
+                    self.duplicate_files.add(file_path)
+            
+            # 隐藏并取消勾选重复文件
+            item.setHidden(is_duplicate)
+            if is_duplicate:
+                item.setCheckState(Qt.CheckState.Unchecked)
+            else:
+                # 恢复显示的项应默认选中，除非用户手动取消过（此处简单处理为显示即选中）
+                item.setCheckState(Qt.CheckState.Checked)
+        
+        self.updating_tree = False
+        self.on_grid_selection_changed() # 刷新统计和右侧树
 
     def update_thumbnail(self, file_path, icon):
         # 在 Grid 中找到对应的 Item 并更新图标
@@ -650,11 +712,15 @@ class LightroomImport(QMainWindow):
     
     def on_grid_selection_changed(self):
         """更新选择信息和预览"""
+        if self.updating_tree: # 防止在 update_grid_filter 时重复刷新
+            return
+            
         # 收集所有勾选的文件
         self.selected_items.clear()
         for i in range(self.grid_list.count()):
             item = self.grid_list.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
+            # 仅统计未隐藏且勾选的文件
+            if not item.isHidden() and item.checkState() == Qt.CheckState.Checked:
                 self.selected_items.add(item.data(Qt.ItemDataRole.UserRole))
         
         # 更新统计
@@ -663,10 +729,10 @@ class LightroomImport(QMainWindow):
         # 刷新目标树，显示导入预览（实时更新）
         self.refresh_target_tree()
         
-        # 显示第一个勾选文件的预览
-        selected_items = self.grid_list.selectedItems()
-        if selected_items:
-            file_path = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        # 显示第一个勾选文件的预览 (保持不变)
+        selected_grid_items = self.grid_list.selectedItems()
+        if selected_grid_items and not selected_grid_items[0].isHidden():
+            file_path = selected_grid_items[0].data(Qt.ItemDataRole.UserRole)
             self.update_preview(file_path)
         else:
             self.update_preview(None)
@@ -725,7 +791,7 @@ class LightroomImport(QMainWindow):
             self.target_directory = dir_path
             self.target_label.setText(dir_path)
             self.status_label.setText(f"目标: {os.path.basename(dir_path)}")
-            self.refresh_target_tree()
+            self.update_grid_filter()
     
     def on_import_clicked(self):
         """开始导入"""
@@ -733,8 +799,12 @@ class LightroomImport(QMainWindow):
             QMessageBox.warning(self, "提示", "请先选择要导入的文件")
             return
         
-        # 获取选中的文件
-        files_to_import = list(self.selected_items)
+        # 获取选中的文件（排除重复的）
+        files_to_import = list(self.selected_items - self.duplicate_files)
+        
+        if not files_to_import:
+            QMessageBox.warning(self, "提示", "所有选择的文件都已存在（无重复导入）")
+            return
         
         # 获取导入模式
         mode_text = self.mode_group.checkedButton().text()
@@ -765,6 +835,10 @@ class LightroomImport(QMainWindow):
             msg = f"即将导入 {len(files_to_import)} 个文件\n{preview_fmt}\n时间源: {'拍摄时间' if time_source == 'exif' else '文件修改时间'}\n目标: {self.target_directory}"
         else:
             msg = f"即将导入 {len(files_to_import)} 个文件到: {self.target_directory}"
+        
+        # 如果有重复文件，在确认对话框中告知
+        if self.duplicate_files:
+            msg += f"\n\n跳过 {len(self.duplicate_files)} 个重复文件（哈希相同）"
         
         reply = QMessageBox.question(self, "确认导入", msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
@@ -809,18 +883,17 @@ class LightroomImport(QMainWindow):
     def on_date_format_changed(self, format_text):
         """日期格式变更回调"""
         self.date_format = format_text
-        self.refresh_target_tree()
+        self.update_grid_filter()
     
     def on_time_source_changed(self, source):
         """时间源变更回调"""
         self.time_source = source
-        self.refresh_target_tree()
+        self.update_grid_filter()
     
     def on_template_changed(self, text):
         """自定义模板变更回调"""
         self.custom_template = text.strip()
-        if self.custom_template or self.organize_checkbox.isChecked():
-            self.refresh_target_tree()
+        self.update_grid_filter()
     
     def on_tree_item_changed(self, item, column):
         """目录树项勾选状态改变回调"""
@@ -868,10 +941,16 @@ class LightroomImport(QMainWindow):
     
     def refresh_target_tree(self):
         """刷新目标位置的目录树视图（按 Lightroom 规范）"""
+        if self.updating_tree:
+            return
         self.updating_tree = True
+        
+        # 阻塞信号防止 clear() 触发 itemChanged 导致的问题
+        self.target_tree.blockSignals(True)
         self.target_tree.clear()
         
         if not os.path.exists(self.target_directory):
+            self.target_tree.blockSignals(False)
             self.updating_tree = False
             return
         
@@ -896,11 +975,13 @@ class LightroomImport(QMainWindow):
             self.populate_tree(root, self.target_directory, existing_only=False)
         
         root.setExpanded(True)
+        self.target_tree.blockSignals(False)
         self.updating_tree = False
     
     def calculate_import_structure(self):
-        """计算导入后的目录结构和文件分配"""
+        """计算导入后的目录结构和文件分配，并过滤重复文件"""
         import_structure = {}  # path_str -> [filenames]
+        self.duplicate_files.clear()
         
         for file_path in self.selected_items:
             if os.path.exists(file_path):
@@ -910,12 +991,45 @@ class LightroomImport(QMainWindow):
                 else:
                     path_str = self.get_path_from_file(file_path, use_template=False)
                 
-                if path_str not in import_structure:
-                    import_structure[path_str] = []
+                # 检测目标目录中是否有同名文件
+                target_full_path = os.path.join(self.target_directory, path_str)
+                dest_file = os.path.join(target_full_path, os.path.basename(file_path))
                 
-                import_structure[path_str].append(os.path.basename(file_path))
+                is_duplicate = False
+                if os.path.exists(dest_file):
+                    # 有同名文件，比对哈希
+                    if self.files_are_identical(file_path, dest_file):
+                        is_duplicate = True
+                        self.duplicate_files.add(file_path)
+                
+                # 仅将非重复文件添加到导入结构
+                if not is_duplicate:
+                    if path_str not in import_structure:
+                        import_structure[path_str] = []
+                    import_structure[path_str].append(os.path.basename(file_path))
         
         return import_structure
+    
+    def files_are_identical(self, file1, file2):
+        """比对两个文件是否完全相同"""
+        import hashlib
+        
+        def hash_file(fpath):
+            hasher = hashlib.md5()
+            try:
+                with open(fpath, 'rb') as f:
+                    buf = f.read(65536)
+                    while len(buf) > 0:
+                        hasher.update(buf)
+                        buf = f.read(65536)
+                return hasher.hexdigest()
+            except:
+                return None
+        
+        hash1 = hash_file(file1)
+        hash2 = hash_file(file2)
+        
+        return hash1 and hash2 and hash1 == hash2
     
     def get_path_from_file(self, file_path, use_template=False):
         """从文件获取路径字符串"""
@@ -1018,8 +1132,10 @@ class LightroomImport(QMainWindow):
                 full_path = os.path.join(directory, entry)
                 if os.path.isdir(full_path) and not entry.startswith('.'):
                     item = QTreeWidgetItem(parent_item)
-                    item.setText(0, entry)
+                    item.setText(0, f"📁 {entry}")
                     item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
+                    # 存储原始名称用于匹配
+                    item.setData(0, Qt.ItemDataRole.UserRole + 2, entry)
                     
                     # 递归添加子文件夹
                     self.populate_tree(item, full_path, max_depth, current_depth + 1, existing_only=existing_only)
@@ -1030,7 +1146,7 @@ class LightroomImport(QMainWindow):
                     full_path = os.path.join(directory, entry)
                     if os.path.isfile(full_path) and not entry.startswith('.'):
                         item = QTreeWidgetItem(parent_item)
-                        item.setText(0, entry)
+                        item.setText(0, f"📄 {entry}")
                         item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
         except PermissionError:
             pass
@@ -1045,26 +1161,26 @@ class LightroomImport(QMainWindow):
             files = import_structure[path_str]
             file_count = len(files)
             
-            # 检查路径是否已存在
-            full_path = os.path.join(self.target_directory, path_str)
-            exists = os.path.exists(full_path)
-            
             # 处理多级目录
             path_parts = path_str.split('/')
             parent_item = root_item
             
             for i, part in enumerate(path_parts):
-                # 检查此级目录是否已存在
-                partial_path = os.path.join(self.target_directory, *path_parts[:i+1])
-                part_exists = os.path.exists(partial_path)
-                
-                # 在parent中查找是否已有该项
+                # 在parent中查找是否已有该项 (优先匹配 UserRole)
                 found_item = None
                 for j in range(parent_item.childCount()):
                     child = parent_item.child(j)
-                    if part in child.text(0):
+                    # 匹配 UserRole 存储的原始值或显示文本
+                    if child.data(0, Qt.ItemDataRole.UserRole + 2) == part:
                         found_item = child
                         break
+                    if part in child.text(0): # 兜底逻辑
+                        found_item = child
+                        break
+                
+                # 检查此级目录物理上是否已存在
+                partial_path = os.path.join(self.target_directory, *path_parts[:i+1])
+                part_exists = os.path.exists(partial_path)
                 
                 if found_item:
                     item = found_item
@@ -1072,22 +1188,26 @@ class LightroomImport(QMainWindow):
                     item = QTreeWidgetItem(parent_item)
                     item.setText(0, f"📁 {part}")
                     item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
-                    
-                    # 如果目录不存在，显示为虚拟路径并添加勾选框
-                    if not part_exists:
-                        font = item.font(0)
-                        font.setItalic(True)
-                        item.setFont(0, font)
-                        item.setForeground(0, QColor("#666666"))
-                        item.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
-                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                        # 存储路径信息
-                        item.setData(0, Qt.ItemDataRole.UserRole, '/'.join(path_parts[:i+1]))
-                    else:
-                        font = item.font(0)
-                        font.setItalic(False)
-                        item.setFont(0, font)
-                        item.setForeground(0, QColor("#88CCFF"))
+                    item.setData(0, Qt.ItemDataRole.UserRole + 2, part)
+                
+                # 如果是最后一级或者是新路径，确保视觉呈现（虚拟 vs 物理）
+                if not part_exists:
+                    font = item.font(0)
+                    font.setItalic(True)
+                    item.setFont(0, font)
+                    item.setForeground(0, QColor("#666666"))
+                else:
+                    font = item.font(0)
+                    font.setItalic(False)
+                    item.setFont(0, font)
+                    item.setForeground(0, QColor("#88CCFF"))
+                
+                # 如果是导入的叶子文件夹，添加勾选框
+                if i == len(path_parts) - 1:
+                    item.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    # 存储相对路径用于信号处理
+                    item.setData(0, Qt.ItemDataRole.UserRole, '/'.join(path_parts))
                 
                 parent_item = item
             
@@ -1096,12 +1216,15 @@ class LightroomImport(QMainWindow):
                 last_item = parent_item
                 # 添加文件列表提示
                 file_info = QTreeWidgetItem(last_item)
-                file_info.setText(0, f"📊 {file_count} 文件")
+                file_info.setText(0, f"📊 {file_count} 待导入文件")
                 file_info.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
                 file_info.setForeground(0, QColor("#999999"))
                 font = file_info.font(0)
                 font.setItalic(True)
                 file_info.setFont(0, font)
+                
+                # 获取该目录是否已存在
+                exists = os.path.exists(os.path.join(self.target_directory, path_str))
                 
                 # 添加前3个文件作为预览
                 for filename in sorted(files)[:3]:
@@ -1114,6 +1237,8 @@ class LightroomImport(QMainWindow):
                         font.setItalic(True)
                         file_item.setFont(0, font)
                         file_item.setForeground(0, QColor("#666666"))
+                    else:
+                        file_item.setForeground(0, QColor("#88CCFF"))
                 
                 # 如果超过3个，显示省略号
                 if len(files) > 3:
