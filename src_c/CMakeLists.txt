@@ -7,17 +7,17 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Sources
 set(SOURCES
-    src_c/main.c
-    src_c/scanner.c
-    src_c/import.c
-    src_c/hash.c
+    main.c
+    scanner.c
+    import.c
+    hash.c
 )
 
 set(HEADERS
-    src_c/common.h
-    src_c/scanner.h
-    src_c/import.h
-    src_c/hash.h
+    common.h
+    scanner.h
+    import.h
+    hash.h
 )
 
 if(WIN32)

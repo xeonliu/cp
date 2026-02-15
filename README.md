@@ -1,8 +1,48 @@
-# Lightroom Import Clone (C++ / Qt6)
+# Lightroom Import Clone
 
-This project is a migration of the Python-based Lightroom Import Clone to C++17 using Qt6.
+This project provides photo/video import and organization tools, similar to Adobe Lightroom's import functionality.
 
-## Features
+## Available Implementations
+
+### 1. Qt6/C++ Version (Cross-Platform)
+A full-featured cross-platform version with GUI preview and thumbnail support.
+
+**Features:**
+- Cross-platform (Windows, macOS, Linux)
+- Preview images with thumbnails
+- RAW file support via LibRaw
+- Modern Qt6-based UI
+
+See the main build instructions below for this version.
+
+### 2. WinAPI C Version (Windows-Only, High Performance) ⚡
+A lightweight, high-performance Windows-native implementation using pure WinAPI and C.
+
+**Features:**
+- Windows-only, optimized for maximum performance
+- Pure C implementation with no external dependencies
+- Memory-mapped file I/O for fast hash computation
+- Native Windows threading
+- ~100 KB executable size (vs 10-20 MB for Qt version)
+- All core features except preview
+
+📖 **See [README_C.md](README_C.md) for details and build instructions**
+
+Build the C version:
+```cmd
+cd src_c
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
+Or use NMAKE:
+```cmd
+nmake /f Makefile
+```
+
+---
+
+## Qt6/C++ Version - Build Instructions
 
 - Scan folders for photos and videos (recursive option).
 - Generate thumbnails (using LibRaw for RAW files).
@@ -11,8 +51,6 @@ This project is a migration of the Python-based Lightroom Import Clone to C++17 
 - Preview images.
 - Cross-platform support (Windows, macOS, Linux).
 
-## Build Instructions
-
 ### Prerequisites
 
 - CMake 3.16+
@@ -20,7 +58,7 @@ This project is a migration of the Python-based Lightroom Import Clone to C++17 
 - C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+)
 - LibRaw (optional, will be fetched automatically if not found)
 
-### Steps
+### Build Steps
 
 1. **Clone the repository:**
    ```bash
