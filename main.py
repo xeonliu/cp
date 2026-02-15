@@ -553,11 +553,17 @@ class LightroomImport(QMainWindow):
         self.date_format = 'YYYY-MM-DD'
         self.time_source = 'file_mtime'
         self.custom_template = ''
-        self.updating_tree = False  # 防止递归更新
-        self.duplicate_files = set()  # 存储重复文件的路径
+        self.updating_tree = False
+        self.duplicate_files = set()
         self.last_import_count = 0
         self.last_skipped_duplicates = 0
-        
+        self.thumbnails_enabled = False
+        self.path_cache = {}
+        self.preview_refresh_timer = QTimer(self)
+        self.preview_refresh_timer.setSingleShot(True)
+        self.preview_refresh_timer.timeout.connect(self.refresh_target_tree)
+        self.preview_refresh_delay_ms = 200
+
         # 初始化 UI
         self.setup_ui()
         
@@ -788,6 +794,11 @@ class LightroomImport(QMainWindow):
         self.organize_checkbox.setChecked(True)
         self.organize_checkbox.stateChanged.connect(self.refresh_target_tree)
         options_layout.addWidget(self.organize_checkbox)
+
+        self.thumbnail_checkbox = QCheckBox("生成缩略图（可能较慢）")
+        self.thumbnail_checkbox.setChecked(False)
+        self.thumbnail_checkbox.stateChanged.connect(self.on_thumbnail_toggle_changed)
+        options_layout.addWidget(self.thumbnail_checkbox)
         
         # --- 日期格式选择 ---
         date_format_layout = QHBoxLayout()
@@ -1015,6 +1026,7 @@ class LightroomImport(QMainWindow):
         self.current_files = []
         self.selected_items.clear()
         self.duplicate_files.clear()
+        self.path_cache.clear()
         self.update_preview(None)
         
         recursive = self.recursive_check.isChecked()
@@ -1071,8 +1083,7 @@ class LightroomImport(QMainWindow):
             
         self.scroll_area.setUpdatesEnabled(True)
             
-        # 请求加载这些新文件的缩略图
-        if new_files:
+        if new_files and self.thumbnails_enabled:
             self.request_load.emit(new_files)
             
         self.status_label.setText(f"已发现 {len(self.current_files)} 个文件...")
@@ -1147,8 +1158,7 @@ class LightroomImport(QMainWindow):
         # 更新统计
         self.stats_label.setText(f"已选择: {len(self.selected_items)} 文件")
         
-        # 刷新目标树
-        self.refresh_target_tree()
+        self.schedule_refresh_target_tree()
         
         # 显示最后一个选中文件的预览
         self.update_preview(last_selected_path)
@@ -1321,17 +1331,23 @@ class LightroomImport(QMainWindow):
     def on_date_format_changed(self, format_text):
         """日期格式变更回调"""
         self.date_format = format_text
+        self.path_cache.clear()
         self.update_grid_filter()
     
     def on_time_source_changed(self, source):
         """时间源变更回调"""
         self.time_source = source
+        self.path_cache.clear()
         self.update_grid_filter()
     
     def on_template_changed(self, text):
         """自定义模板变更回调"""
         self.custom_template = text.strip()
+        self.path_cache.clear()
         self.update_grid_filter()
+
+    def on_thumbnail_toggle_changed(self, state):
+        self.thumbnails_enabled = (state == Qt.CheckState.Checked.value)
     
     def on_tree_item_changed(self, item, column):
         """目录树项勾选状态改变回调"""
@@ -1457,6 +1473,9 @@ class LightroomImport(QMainWindow):
     
     def get_path_from_file(self, file_path, use_template=False):
         """从文件获取路径字符串"""
+        key = (file_path, use_template)
+        if key in self.path_cache:
+            return self.path_cache[key]
         try:
             if self.time_source == 'exif':
                 dt = self.get_exif_datetime(file_path)
@@ -1464,13 +1483,19 @@ class LightroomImport(QMainWindow):
                     dt = datetime.fromtimestamp(os.path.getmtime(file_path))
             else:
                 dt = datetime.fromtimestamp(os.path.getmtime(file_path))
-            
             if use_template:
-                return self.format_custom_template(dt, self.custom_template)
+                path_str = self.format_custom_template(dt, self.custom_template)
             else:
-                return self.format_date(dt, self.date_format)
+                path_str = self.format_date(dt, self.date_format)
         except:
-            return datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d')
+            path_str = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d')
+        self.path_cache[key] = path_str
+        return path_str
+
+    def schedule_refresh_target_tree(self):
+        if self.updating_tree:
+            return
+        self.preview_refresh_timer.start(self.preview_refresh_delay_ms)
     
     def get_exif_datetime(self, file_path):
         """尝试从 EXIF 获取拍摄时间"""
@@ -1670,8 +1695,20 @@ class LightroomImport(QMainWindow):
                     more_item.setText(0, f"... 等 {len(files) - 3} 个文件")
                     more_item.setForeground(0, QColor("#999999"))
 
-if __name__ == "__main__":
+def run_app():
     app = QApplication(sys.argv)
     window = LightroomImport()
     window.show()
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--profile-output", default="profile_main.prof")
+    args = parser.parse_args()
+    if args.profile:
+        import cProfile
+        cProfile.runctx("run_app()", globals(), locals(), args.profile_output)
+    else:
+        run_app()
