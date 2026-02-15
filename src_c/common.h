@@ -1,6 +1,13 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+// Windows XP compatibility
+#ifdef BUILD_FOR_XP
+#define WINVER 0x0501          // Windows XP
+#define _WIN32_WINNT 0x0501    // Windows XP
+#define _WIN32_IE 0x0600       // Internet Explorer 6.0 (for Common Controls v6)
+#endif
+
 #define UNICODE
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN

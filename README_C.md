@@ -8,6 +8,7 @@ This version reimplements the Lightroom-style photo import tool using:
 - **Pure C language** (C11 standard)
 - **Native Windows API** (WinAPI) for UI and file operations
 - **Optimized for Windows performance**
+- **Windows XP Support**: Special XP-compatible build available
 
 Unlike the Qt/C++ version, this implementation is Windows-only but offers better performance on Windows systems through:
 1. Direct Windows API usage (no abstraction layers)
@@ -88,11 +89,14 @@ HANDLE hFind = FindFirstFileW(searchPath, &findData);
 ## Build Instructions
 
 ### Prerequisites
-- Windows 10 or later
+- Windows 10 or later (for modern build)
+- **OR** Windows XP SP3 or later (for XP-compatible build)
 - Visual Studio 2019 or later (with MSVC compiler)
 - Windows SDK
 
-### Option 1: Using CMake
+### Modern Build (Windows 7+)
+
+#### Option 1: Using CMake
 ```cmd
 cd src_c
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -118,6 +122,31 @@ cl /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
    /link /SUBSYSTEM:WINDOWS comctl32.lib shlwapi.lib shell32.lib ole32.lib ^
    /OUT:LightroomImportClone_C.exe
 ```
+
+### Windows XP Compatible Build
+
+For Windows XP SP3 and later, use the XP-specific CMakeLists:
+
+```cmd
+cd src_c
+# Copy XP CMakeLists
+copy CMakeLists_XP.txt CMakeLists.txt
+
+# Configure with XP toolset (requires Visual Studio 2019)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -T v141_xp -A Win32
+
+# Build
+cmake --build build --config Release
+```
+
+The XP-compatible executable will be in `src_c\build\Release\LightroomImportClone_C_XP.exe`
+
+**Note**: The XP build:
+- Targets 32-bit (x86) architecture
+- Uses the v141_xp platform toolset (Visual Studio 2019)
+- Defines `BUILD_FOR_XP` to enable XP compatibility macros
+- Sets subsystem to Windows 5.01 (XP)
+- Is automatically built by CI and available as artifacts
 
 ## Usage
 

@@ -100,3 +100,104 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows-xp:
+    runs-on: windows-2019  # Use 2019 for XP toolset support
+    permissions:
+      contents: write  # Write access for artifact upload and releases
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup MSVC with XP toolset
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Configure CMake for Windows XP
+      shell: pwsh
+      run: |
+        # Copy XP-specific CMakeLists for the build
+        Copy-Item src_c\CMakeLists.txt src_c\CMakeLists.backup
+        Copy-Item src_c\CMakeLists_XP.txt src_c\CMakeLists.txt
+        
+        # Configure with XP toolset
+        cmake -B build_xp -DCMAKE_BUILD_TYPE=Release -T v141_xp -A Win32 -S src_c
+
+    - name: Build XP Version with CMake
+      run: cmake --build build_xp --config Release
+    
+    - name: Restore CMakeLists
+      if: always()
+      shell: pwsh
+      run: |
+        if (Test-Path src_c\CMakeLists.backup) {
+          Copy-Item src_c\CMakeLists.backup src_c\CMakeLists.txt -Force
+          Remove-Item src_c\CMakeLists.backup
+        }
+
+    - name: Create Windows XP Release Package
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path release_xp
+        # Copy from CMake build
+        if (Test-Path "build_xp\Release\LightroomImportClone_C_XP.exe") {
+          Copy-Item "build_xp\Release\LightroomImportClone_C_XP.exe" release_xp\LightroomImportClone_C_XP.exe
+        }
+        # Create README for the XP release
+        @"
+        # Lightroom Import Clone - Windows XP Compatible Version
+        
+        This is a Windows XP compatible version using pure WinAPI and C.
+        Compiled with Visual Studio 2019 v141_xp toolset for maximum compatibility.
+        
+        ## System Requirements
+        - Windows XP SP3 or later
+        - 32-bit (x86) architecture
+        
+        ## Features
+        - Fast file scanning (recursive and non-recursive)
+        - MD5-based deduplication
+        - Custom folder structure (date-based organization)
+        - Copy or Move files
+        - Multi-threaded operations for optimal performance
+        - Preview folder structure before importing
+        
+        ## Usage
+        1. Select a source folder from the tree view
+        2. Click "Scan" to find image and video files
+        3. Use "Preview Structure" to see how files will be organized
+        4. Configure target folder and import options
+        5. Click "Import Files" to copy/move files
+        
+        ## Supported File Types
+        - Images: JPG, PNG, BMP, GIF, TIFF
+        - RAW: ARW, CR2, NEF, DNG, ORF, RW2
+        - Videos: MP4, MOV, AVI, MKV, WMV, MPG
+        
+        ## Performance Optimizations
+        - Memory-mapped file I/O for large files
+        - Native Windows APIs (FindFirstFile, etc.)
+        - Multi-threaded scanning and importing
+        - Efficient MD5 hashing
+        
+        Built on: $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))
+        Commit: ${{github.sha}}
+        Platform: Windows XP (x86)
+        Toolset: Visual Studio 2019 v141_xp
+        "@ | Out-File -FilePath release_xp\README.txt -Encoding UTF8
+
+    - name: Upload Windows XP Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LightroomImportClone-WinAPI-C-XP-${{ github.sha }}
+        path: release_xp/*
+        retention-days: 90
+
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release_xp/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
