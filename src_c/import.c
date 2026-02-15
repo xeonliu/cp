@@ -131,29 +131,30 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
             bool success = ImportFile(file->path, g_app.targetPath, g_app.isMoving, 
                                      g_app.organizeByDate, g_app.dateFormatIndex, &file->fileTime);
             if (!success) {
+                // Use synchronous update for error messages
                 wchar_t errorMsg[512];
                 swprintf_s(errorMsg, 512, L"Failed to import: %s", file->path);
-                PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)errorMsg);
+                SetWindowTextW(g_app.hwndStatusText, errorMsg);
             }
         }
         
         processedFiles++;
         SendMessage(g_app.hwndProgressBar, PBM_SETPOS, processedFiles, 0);
         
-        // Update status every 10 files
+        // Update status every 10 files (synchronous to avoid lifetime issues)
         if (processedFiles % 10 == 0 || processedFiles == totalFiles) {
             wchar_t statusText[256];
             swprintf_s(statusText, 256, L"Importing: %d/%d (Skipped %d duplicates)", 
                       processedFiles, totalFiles, skippedDuplicates);
-            PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)statusText);
+            SetWindowTextW(g_app.hwndStatusText, statusText);
         }
     }
     
-    // Final status
+    // Final status (synchronous)
     wchar_t finalStatus[256];
     swprintf_s(finalStatus, 256, L"Import complete: %d files, %d duplicates skipped", 
               processedFiles, skippedDuplicates);
-    PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)finalStatus);
+    SetWindowTextW(g_app.hwndStatusText, finalStatus);
     
     // Reset progress bar
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);

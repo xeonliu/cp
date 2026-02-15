@@ -229,18 +229,33 @@ bool ComputeFileHashFast(const wchar_t* filepath, unsigned char hash[HASH_SIZE])
     MD5Init(&context);
 
     // For large files, use memory mapping for better performance
-    if (fileSize.QuadPart > 10 * 1024 * 1024) { // > 10MB
+    // Note: Memory-mapped hashing works best for files up to a few hundred MB
+    // For very large files (>1GB), we'll use chunked reading instead
+    if (fileSize.QuadPart > 10 * 1024 * 1024 && fileSize.QuadPart < 500LL * 1024 * 1024) { // 10MB - 500MB
         HANDLE hMapping = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
         if (hMapping != NULL) {
-            LPVOID lpBaseAddress = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+            // Map the entire file
+            SIZE_T mapSize = (SIZE_T)fileSize.QuadPart;
+            LPVOID lpBaseAddress = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, mapSize);
             if (lpBaseAddress != NULL) {
-                MD5Update(&context, (const unsigned char*)lpBaseAddress, (unsigned int)fileSize.QuadPart);
+                // Process in chunks to avoid 32-bit overflow
+                const SIZE_T chunkSize = 100 * 1024 * 1024; // 100MB chunks
+                SIZE_T remaining = mapSize;
+                unsigned char* ptr = (unsigned char*)lpBaseAddress;
+                
+                while (remaining > 0) {
+                    SIZE_T toProcess = (remaining > chunkSize) ? chunkSize : remaining;
+                    MD5Update(&context, ptr, (unsigned int)toProcess);
+                    ptr += toProcess;
+                    remaining -= toProcess;
+                }
+                
                 UnmapViewOfFile(lpBaseAddress);
             }
             CloseHandle(hMapping);
         }
     } else {
-        // For small files, read directly
+        // For small files or very large files, read in chunks
         unsigned char buffer[BUFFER_SIZE];
         DWORD bytesRead;
         

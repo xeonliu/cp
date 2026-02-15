@@ -47,8 +47,8 @@ void AddFile(const wchar_t* filepath, const WIN32_FIND_DATAW* findData) {
     
     LeaveCriticalSection(&g_app.csFiles);
     
-    // Update UI on main thread
-    PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)L"Scanning...");
+    // Update UI on main thread (synchronous for safety)
+    SetWindowTextW(g_app.hwndStatusText, L"Scanning...");
 }
 
 void ScanDirectory(const wchar_t* path, bool recursive) {
@@ -97,8 +97,8 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
     
     g_app.stopRequested = false;
     
-    // Update status
-    PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)L"Scanning files...");
+    // Update status (synchronous to avoid lifetime issues)
+    SetWindowTextW(g_app.hwndStatusText, L"Scanning files...");
     
     // Scan directory
     ScanDirectory(path, g_app.isRecursive);
@@ -116,10 +116,14 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
     }
     LeaveCriticalSection(&g_app.csFiles);
     
-    // Update status
-    wchar_t statusText[256];
-    swprintf_s(statusText, 256, L"Found %d files", g_app.fileCount);
-    PostMessage(g_app.hwndStatusText, WM_SETTEXT, 0, (LPARAM)statusText);
+    // Update status (allocate string for async update)
+    wchar_t* statusText = (wchar_t*)malloc(256 * sizeof(wchar_t));
+    if (statusText) {
+        swprintf_s(statusText, 256, L"Found %d files", g_app.fileCount);
+        // Use synchronous update to avoid memory management complexity
+        SetWindowTextW(g_app.hwndStatusText, statusText);
+        free(statusText);
+    }
     
     free(path);
     return 0;

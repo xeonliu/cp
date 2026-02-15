@@ -37,7 +37,8 @@ cmake --build build --config Release
 
 Or use NMAKE:
 ```cmd
-nmake /f Makefile
+cd src_c
+nmake /f Makefile.msvc
 ```
 
 ---
