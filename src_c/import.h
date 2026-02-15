@@ -3,6 +3,13 @@
 
 #include "common.h"
 
+// Import result codes
+typedef enum {
+    IMPORT_SUCCESS = 0,      // File imported successfully
+    IMPORT_DUPLICATE = 1,    // File is a duplicate (already exists in target)
+    IMPORT_FAILED = 2        // Import failed
+} ImportResult;
+
 // Import thread function
 DWORD WINAPI ImportThread(LPVOID lpParam);
 
@@ -13,7 +20,7 @@ void GetDateSubdirectory(const FILETIME* ft, int formatIndex, wchar_t* outPath, 
 void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTemplate, wchar_t* outPath, size_t outSize);
 
 // Copy or move file with deduplication
-bool ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move, bool organizeByDate, int dateFormatIndex, const wchar_t* customTemplate, const FILETIME* fileTime);
+ImportResult ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move, bool organizeByDate, int dateFormatIndex, const wchar_t* customTemplate, const FILETIME* fileTime);
 
 // Check if two files are identical by hash
 bool FilesAreIdentical(const wchar_t* file1, const wchar_t* file2);

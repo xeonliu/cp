@@ -142,7 +142,7 @@ bool FilesAreIdentical(const wchar_t* file1, const wchar_t* file2) {
     return HashesEqual(hash1, hash2);
 }
 
-bool ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move, 
+ImportResult ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move, 
                 bool organizeByDate, int dateFormatIndex, const wchar_t* customTemplate, const FILETIME* fileTime) {
     wchar_t targetPath[MAX_PATH_LEN];
     wcscpy_s(targetPath, MAX_PATH_LEN, targetBase);
@@ -182,8 +182,8 @@ bool ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move,
     if (PathFileExistsW(destFile)) {
         // Check if files are identical (deduplication)
         if (FilesAreIdentical(sourcePath, destFile)) {
-            // Files are identical, skip
-            return true;
+            // Files are identical, skip (this is a duplicate)
+            return IMPORT_DUPLICATE;
         } else {
             // Files are different, add suffix to avoid overwrite
             wchar_t baseName[MAX_PATH_LEN];
@@ -209,7 +209,7 @@ bool ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move,
         result = CopyFileW(sourcePath, destFile, FALSE);
     }
     
-    return result != 0;
+    return result ? IMPORT_SUCCESS : IMPORT_FAILED;
 }
 
 DWORD WINAPI ImportThread(LPVOID lpParam) {
@@ -232,25 +232,30 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
             file->hashComputed = true;
         }
         
-        // Check for duplicates in already imported files
-        bool isDuplicate = false;
+        // Check for duplicates in already imported files within current batch
+        bool isDuplicateInBatch = false;
         for (int j = 0; j < i; j++) {
             if (g_app.files[j].hashComputed && HashesEqual(file->hash, g_app.files[j].hash)) {
-                isDuplicate = true;
+                isDuplicateInBatch = true;
                 skippedDuplicates++;
                 break;
             }
         }
         
-        if (!isDuplicate) {
-            bool success = ImportFile(file->path, g_app.targetPath, g_app.isMoving, 
+        if (!isDuplicateInBatch) {
+            ImportResult result = ImportFile(file->path, g_app.targetPath, g_app.isMoving, 
                                      g_app.organizeByDate, g_app.dateFormatIndex, g_app.customTemplate, &file->fileTime);
-            if (!success) {
+            
+            if (result == IMPORT_DUPLICATE) {
+                // File already exists in target directory and is identical
+                skippedDuplicates++;
+            } else if (result == IMPORT_FAILED) {
                 // Use synchronous update for error messages
                 wchar_t errorMsg[512];
                 swprintf_s(errorMsg, 512, L"Failed to import: %s", file->path);
                 SetWindowTextW(g_app.hwndStatusText, errorMsg);
             }
+            // IMPORT_SUCCESS - file was imported successfully, no action needed
         }
         
         processedFiles++;
@@ -274,5 +279,6 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
     // Reset progress bar
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);
     
+    g_app.hImportThread = NULL;
     return 0;
 }
