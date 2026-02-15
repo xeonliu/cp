@@ -1,0 +1,7 @@
+psutil>=7.2.2
+pyqt6>=6.10.2
+rawpy>=0.26.1
+
+[dev]
+ruff>=0.7.0
+pyinstaller>=6.11.0

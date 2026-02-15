@@ -1,10 +1,21 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
 build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
+.DS_Store
+*.user
+*.pro
+*.autosave
+*.o
+*.obj
+*.exe
+*.app
+*.dmg
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.log
+compile_commands.json
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+*.pyo

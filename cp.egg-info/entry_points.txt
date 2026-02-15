@@ -1,0 +1,2 @@
+[console_scripts]
+cp = cp:run_app
