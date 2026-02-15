@@ -279,6 +279,13 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
     // Reset progress bar
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);
     
+    // Close thread handle and mark as complete
+    // Note: We can close our own handle since we won't access it after this
+    HANDLE hThread = g_app.hImportThread;
     g_app.hImportThread = NULL;
+    if (hThread) {
+        CloseHandle(hThread);
+    }
+    
     return 0;
 }

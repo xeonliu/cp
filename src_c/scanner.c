@@ -130,6 +130,13 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
         UpdatePreviewTree();
     }
     
+    // Close thread handle and mark as complete
+    HANDLE hThread = g_app.hScanThread;
+    g_app.hScanThread = NULL;
+    if (hThread) {
+        CloseHandle(hThread);
+    }
+    
     free(path);
     return 0;
 }
