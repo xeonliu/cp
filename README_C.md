@@ -24,6 +24,7 @@ Unlike the Qt/C++ version, this implementation is Windows-only but offers better
 - ✅ **Import Operations**: Copy or Move files
 - ✅ **Multi-threading**: Separate threads for scanning and importing
 - ✅ **Progress Tracking**: Real-time progress updates
+- ✅ **Preview Structure**: Preview folder organization before importing
 
 ### Supported File Types
 - **Images**: JPG, JPEG, PNG, BMP, GIF, TIFF
@@ -124,13 +125,17 @@ cl /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
 2. **Configure Scan Options**: 
    - Check "Recursive Scan" to scan subdirectories
 3. **Click "Scan"**: The application will find all supported files
-4. **Configure Target**:
+4. **Preview Structure** (NEW):
+   - The preview tree automatically shows how files will be organized
+   - Click "Preview Structure" button to manually refresh the preview
+   - See file counts for each folder before importing
+5. **Configure Target**:
    - Enter or browse to select target folder
    - Choose "Copy" or "Move" mode
    - Optionally enable "Organize by Date"
    - Select date format (including nested formats like `YYYY/YYYY-MM-DD`)
    - Or choose "Custom" and enter your own template (e.g., `{year}/{month}/{day}`)
-5. **Click "Import Files"**: Files will be imported with deduplication
+6. **Click "Import Files"**: Files will be imported with deduplication
 
 ## Architecture
 

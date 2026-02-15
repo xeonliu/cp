@@ -24,7 +24,8 @@ A lightweight, high-performance Windows-native implementation using pure WinAPI 
 - Memory-mapped file I/O for fast hash computation
 - Native Windows threading
 - ~100 KB executable size (vs 10-20 MB for Qt version)
-- All core features except preview
+- All core features: scanning, deduplication, custom folder structures, preview
+- **NEW**: Preview folder structure before importing
 
 📖 **See [README_C.md](README_C.md) for details and build instructions**
 
