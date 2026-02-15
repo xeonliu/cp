@@ -36,6 +36,26 @@ Unlike the Qt/C++ version, this implementation is Windows-only but offers better
 - `YYYY-MM` (e.g., 2024-02)
 - `YYYY/MM` (e.g., 2024/02)
 - `YYYY` (e.g., 2024)
+- `YYYY/YYYY-MM-DD` (e.g., 2024/2024-02-15) - nested structure
+- `YYYY-MM/DD` (e.g., 2024-02/15) - nested structure
+- `Custom` - user-defined template with placeholders
+
+### Custom Template Format
+When selecting "Custom" format, you can use the following placeholders:
+- `{year}` or `{year:04d}` - 4-digit year (e.g., 2024)
+- `{month}` or `{month:02d}` - 2-digit month (e.g., 02)
+- `{day}` or `{day:02d}` - 2-digit day (e.g., 15)
+- `{hour}` or `{hour:02d}` - 2-digit hour
+- `{minute}` or `{minute:02d}` - 2-digit minute
+- `{second}` or `{second:02d}` - 2-digit second
+
+**Examples:**
+- `{year}/{year}-{month:02d}-{day:02d}` → `2024/2024-02-15`
+- `{year}/{month}/{day}` → `2024/02/15`
+- `{year}-{month}_{day}` → `2024-02_15`
+- `Photos_{year}/{month:02d}` → `Photos_2024/02`
+
+Use forward slashes (`/`) to create nested directories - they will be automatically converted to backslashes (`\`) on Windows.
 
 ## Performance Optimizations
 
@@ -107,7 +127,9 @@ cl /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
 4. **Configure Target**:
    - Enter or browse to select target folder
    - Choose "Copy" or "Move" mode
-   - Optionally enable "Organize by Date" and select format
+   - Optionally enable "Organize by Date"
+   - Select date format (including nested formats like `YYYY/YYYY-MM-DD`)
+   - Or choose "Custom" and enter your own template (e.g., `{year}/{month}/{day}`)
 5. **Click "Import Files"**: Files will be imported with deduplication
 
 ## Architecture

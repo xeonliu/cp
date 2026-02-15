@@ -34,6 +34,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_app.isMoving = false;
     g_app.dateFormatIndex = 0;
     g_app.stopRequested = false;
+    wcscpy_s(g_app.customTemplate, 256, L"{year}/{year}-{month:02d}-{day:02d}");
     InitializeCriticalSection(&g_app.csFiles);
     GetCurrentDirectoryW(MAX_PATH_LEN, g_app.targetPath);
     
@@ -183,14 +184,28 @@ void CreateUI(HWND hwnd) {
     
     g_app.hwndDateFormatCombo = CreateWindowW(L"COMBOBOX", L"",
                                               WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
-                                              730, y + 25, 200, 150, hwnd, (HMENU)ID_DATE_FORMAT_COMBO, NULL, NULL);
+                                              730, y + 25, 200, 200, hwnd, (HMENU)ID_DATE_FORMAT_COMBO, NULL, NULL);
     SendMessage(g_app.hwndDateFormatCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
     SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY-MM-DD");
     SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY/MM/DD");
     SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY-MM");
     SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY/MM");
     SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY");
+    SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY/YYYY-MM-DD");
+    SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"YYYY-MM/DD");
+    SendMessage(g_app.hwndDateFormatCombo, CB_ADDSTRING, 0, (LPARAM)L"Custom");
     SendMessage(g_app.hwndDateFormatCombo, CB_SETCURSEL, 0, 0);
+    
+    y += 60;
+    
+    // Custom template input
+    CreateWindowW(L"STATIC", L"Custom Template:", WS_VISIBLE | WS_CHILD,
+                 730, y, 150, 25, hwnd, NULL, NULL, NULL);
+    
+    g_app.hwndCustomTemplateEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"{year}/{year}-{month:02d}-{day:02d}",
+                                                   WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+                                                   730, y + 25, 350, 25, hwnd, (HMENU)ID_CUSTOM_TEMPLATE_EDIT, NULL, NULL);
+    SendMessage(g_app.hwndCustomTemplateEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
     
     y += 60;
     
@@ -258,6 +273,9 @@ void OnImportClick() {
     g_app.isMoving = (SendMessage(g_app.hwndMoveRadio, BM_GETCHECK, 0, 0) == BST_CHECKED);
     g_app.organizeByDate = (SendMessage(g_app.hwndOrganizeCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     g_app.dateFormatIndex = (int)SendMessage(g_app.hwndDateFormatCombo, CB_GETCURSEL, 0, 0);
+    
+    // Get custom template
+    GetWindowTextW(g_app.hwndCustomTemplateEdit, g_app.customTemplate, 256);
     
     // Start import thread
     g_app.hImportThread = CreateThread(NULL, 0, ImportThread, NULL, 0, NULL);

@@ -21,10 +21,109 @@ void GetDateSubdirectory(const FILETIME* ft, int formatIndex, wchar_t* outPath, 
         case 4: // YYYY
             swprintf_s(outPath, outSize, L"%04d", st.wYear);
             break;
+        case 5: // YYYY/YYYY-MM-DD (nested)
+            swprintf_s(outPath, outSize, L"%04d\\%04d-%02d-%02d", st.wYear, st.wYear, st.wMonth, st.wDay);
+            break;
+        case 6: // YYYY-MM/DD (nested)
+            swprintf_s(outPath, outSize, L"%04d-%02d\\%02d", st.wYear, st.wMonth, st.wDay);
+            break;
+        case 7: // Custom template
+            // Will be handled separately
+            outPath[0] = L'\0';
+            break;
         default:
             swprintf_s(outPath, outSize, L"%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay);
             break;
     }
+}
+
+// Parse custom template like {year}/{year}-{month:02d}-{day:02d}
+void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTemplate, wchar_t* outPath, size_t outSize) {
+    SYSTEMTIME st;
+    FileTimeToSystemTime(ft, &st);
+    
+    wchar_t result[512] = L"";
+    size_t resultLen = 0;
+    size_t templateLen = wcslen(customTemplate);
+    
+    for (size_t i = 0; i < templateLen && resultLen < outSize - 1; i++) {
+        if (customTemplate[i] == L'{') {
+            // Find the closing brace
+            size_t j = i + 1;
+            while (j < templateLen && customTemplate[j] != L'}') j++;
+            
+            if (j < templateLen) {
+                // Extract placeholder content
+                wchar_t placeholder[64];
+                size_t placeholderLen = j - i - 1;
+                if (placeholderLen < 64) {
+                    wcsncpy_s(placeholder, 64, &customTemplate[i + 1], placeholderLen);
+                    placeholder[placeholderLen] = L'\0';
+                    
+                    // Parse placeholder: key or key:format
+                    wchar_t key[32] = L"";
+                    wchar_t format[32] = L"";
+                    wchar_t* colonPos = wcschr(placeholder, L':');
+                    
+                    if (colonPos) {
+                        size_t keyLen = colonPos - placeholder;
+                        wcsncpy_s(key, 32, placeholder, keyLen);
+                        key[keyLen] = L'\0';
+                        wcscpy_s(format, 32, colonPos + 1);
+                    } else {
+                        wcscpy_s(key, 32, placeholder);
+                    }
+                    
+                    // Get the value based on key
+                    int value = 0;
+                    bool validKey = true;
+                    if (_wcsicmp(key, L"year") == 0) value = st.wYear;
+                    else if (_wcsicmp(key, L"month") == 0) value = st.wMonth;
+                    else if (_wcsicmp(key, L"day") == 0) value = st.wDay;
+                    else if (_wcsicmp(key, L"hour") == 0) value = st.wHour;
+                    else if (_wcsicmp(key, L"minute") == 0) value = st.wMinute;
+                    else if (_wcsicmp(key, L"second") == 0) value = st.wSecond;
+                    else validKey = false;
+                    
+                    if (validKey) {
+                        wchar_t valueStr[16];
+                        // Format the value
+                        if (wcslen(format) > 0 && wcscmp(format, L"02d") == 0) {
+                            swprintf_s(valueStr, 16, L"%02d", value);
+                        } else if (wcslen(format) > 0 && wcscmp(format, L"04d") == 0) {
+                            swprintf_s(valueStr, 16, L"%04d", value);
+                        } else {
+                            // Default formatting: pad month, day, hour, minute, second
+                            if (_wcsicmp(key, L"month") == 0 || _wcsicmp(key, L"day") == 0 ||
+                                _wcsicmp(key, L"hour") == 0 || _wcsicmp(key, L"minute") == 0 || 
+                                _wcsicmp(key, L"second") == 0) {
+                                swprintf_s(valueStr, 16, L"%02d", value);
+                            } else {
+                                swprintf_s(valueStr, 16, L"%d", value);
+                            }
+                        }
+                        
+                        // Append to result
+                        size_t valueLen = wcslen(valueStr);
+                        if (resultLen + valueLen < outSize - 1) {
+                            wcscpy_s(&result[resultLen], outSize - resultLen, valueStr);
+                            resultLen += valueLen;
+                        }
+                    }
+                }
+                i = j; // Skip to closing brace
+            }
+        } else if (customTemplate[i] == L'/') {
+            // Convert forward slash to backslash for Windows paths
+            result[resultLen++] = L'\\';
+        } else {
+            // Regular character
+            result[resultLen++] = customTemplate[i];
+        }
+    }
+    
+    result[resultLen] = L'\0';
+    wcscpy_s(outPath, outSize, result);
 }
 
 bool FilesAreIdentical(const wchar_t* file1, const wchar_t* file2) {
@@ -37,22 +136,31 @@ bool FilesAreIdentical(const wchar_t* file1, const wchar_t* file2) {
 }
 
 bool ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bool move, 
-                bool organizeByDate, int dateFormatIndex, const FILETIME* fileTime) {
+                bool organizeByDate, int dateFormatIndex, const wchar_t* customTemplate, const FILETIME* fileTime) {
     wchar_t targetPath[MAX_PATH_LEN];
     wcscpy_s(targetPath, MAX_PATH_LEN, targetBase);
     
     // If organizing by date, create subdirectory
     if (organizeByDate) {
         wchar_t dateSubdir[256];
-        GetDateSubdirectory(fileTime, dateFormatIndex, dateSubdir, 256);
         
-        wchar_t fullTargetDir[MAX_PATH_LEN];
-        swprintf_s(fullTargetDir, MAX_PATH_LEN, L"%s\\%s", targetBase, dateSubdir);
+        // Use custom template if provided and format is "Custom"
+        if (customTemplate && wcslen(customTemplate) > 0 && dateFormatIndex == 7) {
+            GetDateSubdirectoryFromTemplate(fileTime, customTemplate, dateSubdir, 256);
+        } else {
+            GetDateSubdirectory(fileTime, dateFormatIndex, dateSubdir, 256);
+        }
         
-        // Create directory if it doesn't exist
-        SHCreateDirectoryExW(NULL, fullTargetDir, NULL);
-        
-        wcscpy_s(targetPath, MAX_PATH_LEN, fullTargetDir);
+        // Only create subdirectory if we got a valid result
+        if (wcslen(dateSubdir) > 0) {
+            wchar_t fullTargetDir[MAX_PATH_LEN];
+            swprintf_s(fullTargetDir, MAX_PATH_LEN, L"%s\\%s", targetBase, dateSubdir);
+            
+            // Create directory if it doesn't exist
+            SHCreateDirectoryExW(NULL, fullTargetDir, NULL);
+            
+            wcscpy_s(targetPath, MAX_PATH_LEN, fullTargetDir);
+        }
     }
     
     // Get filename from source path
@@ -129,7 +237,7 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
         
         if (!isDuplicate) {
             bool success = ImportFile(file->path, g_app.targetPath, g_app.isMoving, 
-                                     g_app.organizeByDate, g_app.dateFormatIndex, &file->fileTime);
+                                     g_app.organizeByDate, g_app.dateFormatIndex, g_app.customTemplate, &file->fileTime);
             if (!success) {
                 // Use synchronous update for error messages
                 wchar_t errorMsg[512];

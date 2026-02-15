@@ -35,6 +35,7 @@
 #define ID_MOVE_RADIO 1011
 #define ID_DATE_FORMAT_COMBO 1012
 #define ID_STATUS_TEXT 1013
+#define ID_CUSTOM_TEMPLATE_EDIT 1014
 
 // File information structure
 typedef struct {
@@ -58,12 +59,14 @@ typedef struct {
     HWND hwndCopyRadio;
     HWND hwndMoveRadio;
     HWND hwndDateFormatCombo;
+    HWND hwndCustomTemplateEdit;
     
     FileInfo* files;
     int fileCount;
     int fileCapacity;
     
     wchar_t targetPath[MAX_PATH_LEN];
+    wchar_t customTemplate[256];
     bool isRecursive;
     bool organizeByDate;
     bool isMoving;
