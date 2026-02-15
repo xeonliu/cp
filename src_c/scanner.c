@@ -125,8 +125,7 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
         free(statusText);
     }
     
-    // Trigger preview update if organize by date is enabled
-    extern void UpdatePreviewTree();
+    // Trigger preview update if we have files
     if (g_app.fileCount > 0) {
         UpdatePreviewTree();
     }

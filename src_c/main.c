@@ -358,12 +358,9 @@ void UpdatePreviewTree() {
             wchar_t dateSubdir[256];
             
             // Use custom template if selected
-            if (customTemplate && wcslen(customTemplate) > 0 && dateFormatIndex == 7) {
-                // We need to include the GetDateSubdirectoryFromTemplate function
-                extern void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTemplate, wchar_t* outPath, size_t outSize);
+            if (customTemplate && wcslen(customTemplate) > 0 && dateFormatIndex == DATE_FORMAT_CUSTOM) {
                 GetDateSubdirectoryFromTemplate(&file->fileTime, customTemplate, dateSubdir, 256);
             } else {
-                extern void GetDateSubdirectory(const FILETIME* ft, int formatIndex, wchar_t* outPath, size_t outSize);
                 GetDateSubdirectory(&file->fileTime, dateFormatIndex, dateSubdir, 256);
             }
             
@@ -462,9 +459,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     OnPreviewClick();
                     break;
                 case ID_ORGANIZE_CHECK:
+                    // Auto-update preview when organize checkbox changes
+                    if (HIWORD(wParam) == BN_CLICKED) {
+                        UpdatePreviewTree();
+                    }
+                    break;
                 case ID_DATE_FORMAT_COMBO:
-                    // Auto-update preview when settings change
-                    if (HIWORD(wParam) == CBN_SELCHANGE || LOWORD(wParam) == ID_ORGANIZE_CHECK) {
+                    // Auto-update preview when date format changes
+                    if (HIWORD(wParam) == CBN_SELCHANGE) {
                         UpdatePreviewTree();
                     }
                     break;

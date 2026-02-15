@@ -20,6 +20,7 @@
 #define BUFFER_SIZE 65536
 #define HASH_SIZE 16
 #define MAX_PATH_LEN 32768
+#define DATE_FORMAT_CUSTOM 7  // Index for custom template format
 
 // UI Constants
 #define ID_SCAN_BUTTON 1001
@@ -83,5 +84,10 @@ typedef struct {
 
 // Global state
 extern AppState g_app;
+
+// Function declarations
+void UpdatePreviewTree();
+void GetDateSubdirectory(const FILETIME* ft, int formatIndex, wchar_t* outPath, size_t outSize);
+void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTemplate, wchar_t* outPath, size_t outSize);
 
 #endif // COMMON_H
