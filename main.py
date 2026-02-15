@@ -1,6 +1,10 @@
 import sys
 import os
 import shutil
+import psutil
+import rawpy
+import imageio
+import numpy as np
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QTreeView, QListWidget, 
@@ -8,9 +12,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QScrollArea, QCheckBox, QProgressBar, 
                              QFrame, QButtonGroup, QAbstractItemView, QFileDialog,
                              QMessageBox, QScrollBar, QSpinBox, QTreeWidget, QTreeWidgetItem,
-                             QComboBox, QLineEdit, QRadioButton)
-from PyQt6.QtCore import Qt, QSize, QDir, QThread, pyqtSignal, QObject, QMutex, QWaitCondition
-from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction, QFileSystemModel, QPalette
+                             QComboBox, QLineEdit, QRadioButton, QToolButton, QSizePolicy)
+from PyQt6.QtCore import Qt, QSize, QDir, QThread, pyqtSignal, QObject, QMutex, QWaitCondition, QTimer
+from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction, QFileSystemModel, QPalette, QImage
 
 # --- 样式表 (Dark Mode) ---
 STYLESHEET = """
@@ -62,16 +66,54 @@ class ThumbnailWorker(QObject):
             ext = os.path.splitext(path)[1].lower()
             pixmap = QPixmap()
             
-            # 1. 模拟 RAW 文件 (真实项目中可用 rawpy 读取)
-            if ext in ['.arw', '.cr2', '.nef', '.dng']:
-                pixmap = QPixmap(150, 100)
-                pixmap.fill(QColor("#404040")) # 深灰色代表 RAW
-                # 在图片上画个字
-                from PyQt6.QtGui import QPainter
-                painter = QPainter(pixmap)
-                painter.setPen(Qt.GlobalColor.white)
-                painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, f"RAW\n{ext}")
-                painter.end()
+            # 1. RAW 文件处理 (使用 rawpy)
+            if ext in ['.arw', '.cr2', '.nef', '.dng', '.orf', '.rw2']:
+                try:
+                    # 尝试读取内嵌缩略图以加快速度
+                    with rawpy.imread(path) as raw:
+                        try:
+                            thumb = raw.extract_thumb()
+                        except rawpy.LibRawNoThumbnailError:
+                            thumb = None
+                        
+                        if thumb:
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                # JPEG 格式的缩略图直接加载
+                                qimg = QImage.fromData(thumb.data)
+                            elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                                # RGB 格式的缩略图需要转换
+                                # 注意：这里可能需要根据实际情况调整 stride 和 format
+                                # 为了简单起见，如果无法直接加载 JPEG，我们回退到 postprocess
+                                # 但 postprocess 比较慢，所以先尝试简单的
+                                h, w = thumb.data.shape
+                                # 通常 thumb.data 是一个 numpy array，这里可能需要更多处理
+                                # 暂时跳过复杂的 bitmap 处理，直接用 postprocess 生成缩略图
+                                rgb = raw.postprocess(use_camera_wb=True, bright=1.0, user_sat=None, no_auto_bright=True, half_size=True)
+                                h, w, ch = rgb.shape
+                                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+                            else:
+                                qimg = QImage()
+                        else:
+                            # 如果没有缩略图，使用 postprocess (较慢但质量好)
+                            # half_size=True 可以显著加快速度
+                            rgb = raw.postprocess(use_camera_wb=True, bright=1.0, user_sat=None, no_auto_bright=True, half_size=True)
+                            h, w, ch = rgb.shape
+                            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+
+                        if not qimg.isNull():
+                            pixmap = QPixmap.fromImage(qimg)
+                            # 缩放以适应网格大小，减少内存占用
+                            pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                except Exception as e:
+                    print(f"Error reading RAW {path}: {e}")
+                    # 出错时显示特定图标
+                    pixmap = QPixmap(150, 100)
+                    pixmap.fill(QColor("#502020")) # 深红色代表错误
+                    from PyQt6.QtGui import QPainter
+                    painter = QPainter(pixmap)
+                    painter.setPen(Qt.GlobalColor.white)
+                    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, f"RAW Error\n{ext}")
+                    painter.end()
 
             # 2. 模拟 视频文件
             elif ext in ['.mp4', '.mov', '.avi']:
@@ -99,6 +141,64 @@ class ThumbnailWorker(QObject):
     def stop(self):
         self.is_running = False
 
+# --- 文件扫描工作线程 ---
+class ScannerWorker(QObject):
+    """
+    后台扫描文件，支持递归
+    """
+    files_found = pyqtSignal(list) # 发现一批文件
+    finished = pyqtSignal()        # 扫描完成
+    
+    def __init__(self):
+        super().__init__()
+        self.is_running = False
+        self.valid_extensions = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.nef', '.dng', '.mp4', '.mov'}
+
+    def scan(self, root_path, recursive):
+        self.is_running = True
+        batch = []
+        batch_size = 50
+        
+        if recursive:
+            for root, dirs, files in os.walk(root_path):
+                if not self.is_running: break
+                
+                # 忽略隐藏目录
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                
+                for file in files:
+                    if not self.is_running: break
+                    if file.startswith('.'): continue
+                    
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in self.valid_extensions:
+                        full_path = os.path.join(root, file)
+                        batch.append(full_path)
+                        
+                        if len(batch) >= batch_size:
+                            self.files_found.emit(batch)
+                            batch = []
+        else:
+            try:
+                for entry in os.listdir(root_path):
+                    if not self.is_running: break
+                    full_path = os.path.join(root_path, entry)
+                    if os.path.isfile(full_path) and not entry.startswith('.'):
+                        ext = os.path.splitext(entry)[1].lower()
+                        if ext in self.valid_extensions:
+                            batch.append(full_path)
+            except OSError:
+                pass
+
+        if batch and self.is_running:
+            self.files_found.emit(batch)
+            
+        self.finished.emit()
+        self.is_running = False
+
+    def stop(self):
+        self.is_running = False
+
 # --- 文件导入工作线程 ---
 class ImportWorker(QObject):
     """
@@ -111,6 +211,9 @@ class ImportWorker(QObject):
         super().__init__()
         self.is_running = True
     
+    def stop(self):
+        self.is_running = False
+
     def hash_file(self, file_path, block_size=65536):
         """计算文件的MD5哈希值"""
         import hashlib
@@ -287,9 +390,137 @@ class ImportWorker(QObject):
         
         return re.sub(pattern, replace_var, result)
 
+# --- 自适应高度的 ListWidget ---
+class AutoHeightListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff) # 关闭内部滚动
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection) # 修复多选问题
+        self.setIconSize(QSize(160, 120))
+        self.setGridSize(QSize(180, 160)) # 统一网格大小
+        self.setViewMode(QListWidget.ViewMode.IconMode)
+        self.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.setWordWrap(True)
+        self.setSpacing(5)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.adjust_height()
+
+    def adjust_height(self):
+        # 计算行数
+        count = self.count()
+        if count == 0:
+            self.setFixedHeight(0)
+            return
+
+        # 获取视口宽度
+        width = self.viewport().width()
+        grid_width = self.gridSize().width()
+        if width <= 0 or grid_width <= 0:
+            return
+
+        # 每行能放几个
+        cols = max(1, width // grid_width)
+        rows = (count + cols - 1) // cols
+        
+        # 计算高度
+        height = rows * self.gridSize().height() + 10 # 加上一点边距
+        self.setFixedHeight(height)
+
+# --- 日期分组组件 ---
+class DateSection(QWidget):
+    selection_changed = pyqtSignal() # 当内部选择发生变化时
+
+    def __init__(self, date_str, parent=None):
+        super().__init__(parent)
+        self.date_str = date_str
+        self.is_expanded = True
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        
+        # 头部
+        self.header = QFrame()
+        self.header.setStyleSheet("background-color: #2a2a2a; border-radius: 4px;")
+        self.header.setFixedHeight(30)
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(5, 0, 5, 0)
+        
+        # 展开/折叠按钮
+        self.toggle_btn = QToolButton()
+        self.toggle_btn.setText("▼")
+        self.toggle_btn.setStyleSheet("border: none; color: #aaa; font-weight: bold;")
+        self.toggle_btn.clicked.connect(self.toggle_content)
+        header_layout.addWidget(self.toggle_btn)
+        
+        # 勾选框
+        self.checkbox = QCheckBox(date_str)
+        self.checkbox.setStyleSheet("font-weight: bold; color: #ddd;")
+        self.checkbox.setChecked(True)
+        self.checkbox.stateChanged.connect(self.on_header_checkbox_changed)
+        header_layout.addWidget(self.checkbox)
+        
+        # 数量标签
+        self.count_label = QLabel("(0)")
+        self.count_label.setStyleSheet("color: #888;")
+        header_layout.addWidget(self.count_label)
+        
+        header_layout.addStretch()
+        self.layout.addWidget(self.header)
+        
+        # 内容区域 (ListWidget)
+        self.list_widget = AutoHeightListWidget()
+        self.list_widget.itemSelectionChanged.connect(self.on_list_selection_changed)
+        self.layout.addWidget(self.list_widget)
+
+    def toggle_content(self):
+        self.is_expanded = not self.is_expanded
+        self.list_widget.setVisible(self.is_expanded)
+        self.toggle_btn.setText("▼" if self.is_expanded else "▶")
+
+    def add_item(self, item):
+        self.list_widget.addItem(item)
+        self.update_count()
+        self.list_widget.adjust_height()
+
+    def update_count(self):
+        self.count_label.setText(f"({self.list_widget.count()})")
+
+    def on_header_checkbox_changed(self, state):
+        # 头部勾选 -> 全选/全不选内部
+        is_checked = (state == Qt.CheckState.Checked.value)
+        self.list_widget.blockSignals(True) # 防止递归触发
+        if is_checked:
+            self.list_widget.selectAll()
+        else:
+            self.list_widget.clearSelection()
+        self.list_widget.blockSignals(False)
+        self.selection_changed.emit()
+
+    def on_list_selection_changed(self):
+        # 内部选择变化 -> 更新头部勾选状态
+        selected = len(self.list_widget.selectedItems())
+        total = self.list_widget.count()
+        
+        self.checkbox.blockSignals(True)
+        if selected == 0:
+            self.checkbox.setCheckState(Qt.CheckState.Unchecked)
+        elif selected == total:
+            self.checkbox.setCheckState(Qt.CheckState.Checked)
+        else:
+            self.checkbox.setCheckState(Qt.CheckState.PartiallyChecked)
+        self.checkbox.blockSignals(False)
+        
+        self.selection_changed.emit()
+
 # --- 主窗口 ---
 class LightroomImport(QMainWindow):
     request_load = pyqtSignal(list) # 信号：请求加载文件列表
+    request_scan = pyqtSignal(str, bool) # 信号：请求扫描目录 (路径, 是否递归)
     request_import = pyqtSignal(list, str, str, bool, str, str, str)  # 文件列表, 目标路径, 模式, 是否按日期, 日期格式, 时间源, 自定义模板
 
     def __init__(self):
@@ -302,6 +533,8 @@ class LightroomImport(QMainWindow):
         self.current_files = []
         self.target_directory = os.path.expanduser("~")  # 默认主文件夹
         self.selected_items = set()
+        self.path_to_item = {} # 映射：路径 -> QListWidgetItem
+        self.date_sections = {} # 映射：日期字符串 -> DateSection Widget
         
         # 配置成员
         self.date_format = 'YYYY-MM-DD'
@@ -316,7 +549,24 @@ class LightroomImport(QMainWindow):
         # 初始化线程
         self.init_thread()
 
+        # 设备检测定时器
+        self.device_timer = QTimer(self)
+        self.device_timer.timeout.connect(self.refresh_devices)
+        self.device_timer.start(3000) # 每3秒检测一次
+        self.refresh_devices() # 立即执行一次
+
     def init_thread(self):
+        # 扫描线程
+        self.scan_thread = QThread()
+        self.scanner = ScannerWorker()
+        self.scanner.moveToThread(self.scan_thread)
+        
+        self.request_scan.connect(self.scanner.scan)
+        self.scanner.files_found.connect(self.on_files_found)
+        self.scanner.finished.connect(self.on_scan_finished)
+        
+        self.scan_thread.start()
+
         # 缩略图线程
         self.thread = QThread()
         self.worker = ThumbnailWorker()
@@ -340,10 +590,13 @@ class LightroomImport(QMainWindow):
         self.import_thread.start()
 
     def closeEvent(self, event):
+        self.scanner.stop()
         self.worker.stop()
         self.import_worker.stop()
+        self.scan_thread.quit()
         self.thread.quit()
         self.import_thread.quit()
+        self.scan_thread.wait()
         self.thread.wait()
         self.import_thread.wait()
         event.accept()
@@ -405,10 +658,41 @@ class LightroomImport(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(5)
         
-        title = QLabel(" 源 (Source)")
-        title.setFixedHeight(30)
-        title.setStyleSheet("font-weight: bold; background-color: #333; color: #eee;")
+        # --- 设备部分 ---
+        dev_title = QLabel(" 设备 (Devices)")
+        dev_title.setFixedHeight(30)
+        dev_title.setStyleSheet("font-weight: bold; background-color: #333; color: #eee; padding-left: 5px;")
+        layout.addWidget(dev_title)
+
+        self.device_list = QListWidget()
+        self.device_list.setMaximumHeight(150)
+        self.device_list.setStyleSheet("background-color: #252525; border: none;")
+        self.device_list.itemClicked.connect(self.on_device_clicked)
+        layout.addWidget(self.device_list)
+
+        # --- 文件夹部分 ---
+        folder_title_layout = QHBoxLayout()
+        folder_title = QLabel(" 文件夹 (Folders)")
+        folder_title.setStyleSheet("font-weight: bold; color: #eee;")
+        
+        self.recursive_check = QCheckBox("包含子文件夹")
+        self.recursive_check.setStyleSheet("color: #aaa; font-size: 11px;")
+        self.recursive_check.setToolTip("递归扫描选中的文件夹（慎用：大文件夹可能会很慢）")
+        self.recursive_check.toggled.connect(self.on_recursive_toggled)
+        
+        folder_title_layout.addWidget(folder_title)
+        folder_title_layout.addStretch()
+        folder_title_layout.addWidget(self.recursive_check)
+        
+        title_frame = QFrame()
+        title_frame.setFixedHeight(30)
+        title_frame.setStyleSheet("background-color: #333;")
+        title_frame.setLayout(folder_title_layout)
+        folder_title_layout.setContentsMargins(5, 0, 5, 0)
+        
+        layout.addWidget(title_frame)
         
         # 文件系统模型
         self.fs_model = QFileSystemModel()
@@ -425,28 +709,29 @@ class LightroomImport(QMainWindow):
         # 信号连接
         self.tree_view.clicked.connect(self.on_folder_clicked)
 
-        layout.addWidget(title)
         layout.addWidget(self.tree_view)
         return container
 
     def create_center_panel(self):
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(10,10,10,10)
+        layout.setContentsMargins(0,0,0,0)
         
-        self.grid_list = QListWidget()
-        self.grid_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.grid_list.setIconSize(QSize(180, 140))
-        self.grid_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.grid_list.setSpacing(10)
-        self.grid_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self.grid_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # 使用 ScrollArea 包裹内容
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #1b1b1b; }")
         
-        # 连接勾选和选择信号以实时更新预览
-        self.grid_list.itemChanged.connect(self.on_grid_selection_changed)
-        self.grid_list.itemSelectionChanged.connect(self.on_grid_selection_changed)
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background-color: #1b1b1b;")
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(10, 10, 10, 10)
+        self.scroll_layout.setSpacing(10)
+        self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        layout.addWidget(self.grid_list)
+        self.scroll_area.setWidget(self.scroll_content)
+        
+        layout.addWidget(self.scroll_area)
         return container
 
     def create_right_panel(self):
@@ -623,50 +908,162 @@ class LightroomImport(QMainWindow):
         return container
 
     # --- 逻辑处理 ---
+    
+    def refresh_devices(self):
+        """刷新可移动设备列表"""
+        current_devices = set()
+        partitions = psutil.disk_partitions(all=True)
+        
+        self.device_list.clear()
+        
+        for p in partitions:
+            # 在 macOS 上，/Volumes 下的通常是可移动设备或挂载点
+            # 在 Windows 上，可以检查 opts 是否包含 'removable' 或 'cdrom'
+            is_removable = False
+            icon_name = "SP_DriveHDIcon"
+            
+            if sys.platform == 'darwin':
+                if p.mountpoint.startswith('/Volumes/'):
+                    is_removable = True
+                elif p.mountpoint == '/':
+                    is_removable = True # 也可以显示系统盘
+                    icon_name = "SP_DriveHDIcon"
+            elif sys.platform == 'win32':
+                if 'removable' in p.opts or 'cdrom' in p.opts:
+                    is_removable = True
+                else:
+                    is_removable = True # 显示所有盘符
+                    icon_name = "SP_DriveHDIcon"
+            else:
+                is_removable = True # Linux 等其他系统
+            
+            if is_removable:
+                item = QListWidgetItem(f"{os.path.basename(p.mountpoint) or p.mountpoint}")
+                item.setData(Qt.ItemDataRole.UserRole, p.mountpoint)
+                item.setIcon(self.style().standardIcon(getattr(self.style().StandardPixmap, icon_name)))
+                self.device_list.addItem(item)
+
+    def on_device_clicked(self, item):
+        """点击设备列表项"""
+        path = item.data(Qt.ItemDataRole.UserRole)
+        # 清除文件树的选择
+        self.tree_view.clearSelection()
+        self.start_scan(path)
 
     def on_folder_clicked(self, index):
+        """点击文件夹树"""
         path = self.fs_model.filePath(index)
+        # 清除设备列表的选择
+        self.device_list.clearSelection()
+        self.start_scan(path)
+        
+    def on_recursive_toggled(self, checked):
+        """包含子文件夹开关切换"""
+        # 如果当前有选中的文件夹或设备，重新扫描
+        current_path = None
+        if self.device_list.currentItem():
+            current_path = self.device_list.currentItem().data(Qt.ItemDataRole.UserRole)
+        else:
+            indexes = self.tree_view.selectedIndexes()
+            if indexes:
+                current_path = self.fs_model.filePath(indexes[0])
+        
+        if current_path:
+            self.start_scan(current_path)
+
+    def start_scan(self, path):
+        """开始扫描目录"""
+        if not path or not os.path.exists(path):
+            return
+
+        self.status_label.setText(f"正在扫描: {path}...")
         
         # 停止旧任务
+        self.scanner.stop()
         self.worker.stop()
         
-        self.grid_list.clear() # 这会触发 itemChanged 信号
+        # 清空现有视图
+        # 移除所有 DateSection
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        
+        self.date_sections.clear()
+        self.path_to_item.clear()
         self.current_files = []
         self.selected_items.clear()
         self.duplicate_files.clear()
         self.update_preview(None)
         
-        valid_extensions = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.nef', '.dng', '.mp4', '.mov'}
+        recursive = self.recursive_check.isChecked()
+        self.request_scan.emit(path, recursive)
+
+    def on_files_found(self, files):
+        """扫描到一批文件"""
+        new_files = []
         
-        # 扫描目录
-        try:
-            entries = os.listdir(path)
-            for entry in entries:
-                full_path = os.path.join(path, entry)
-                if os.path.isfile(full_path):
-                    ext = os.path.splitext(entry)[1].lower()
-                    if ext in valid_extensions:
-                        self.current_files.append(full_path)
-                        
-                        # 先添加一个占位符 Item
-                        item = QListWidgetItem(entry)
-                        item.setData(Qt.ItemDataRole.UserRole, full_path)
-                        # 设置一个默认的灰色图标
-                        default_pix = QPixmap(100, 100)
-                        default_pix.fill(QColor("#333"))
-                        item.setIcon(QIcon(default_pix))
-                        item.setCheckState(Qt.CheckState.Checked) # 默认勾选
-                        
-                        self.grid_list.addItem(item)
+        # 暂停 UI 更新以提高性能
+        self.scroll_area.setUpdatesEnabled(False)
+        
+        for full_path in files:
+            self.current_files.append(full_path)
+            new_files.append(full_path)
             
-            # 启动线程加载真实缩略图
-            if self.current_files:
-                self.request_load.emit(self.current_files)
-                # 加载后立即执行一次重复文件检测并隐藏
-                self.update_grid_filter()
+            # 获取日期用于分组 (简单使用修改时间，优化性能)
+            try:
+                mtime = os.path.getmtime(full_path)
+                date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+            except:
+                date_str = "Unknown Date"
+            
+            # 获取或创建分组
+            if date_str not in self.date_sections:
+                section = DateSection(date_str)
+                section.selection_changed.connect(self.on_grid_selection_changed)
                 
-        except PermissionError:
-            self.status_label.setText("无权限访问该文件夹")
+                # 按日期顺序插入 (简单的倒序插入，新的日期在上面)
+                # 如果需要严格排序，可能需要更复杂的逻辑，这里假设扫描顺序或直接追加
+                # 为了简单，我们直接添加到 layout 底部，然后可能需要排序？
+                # 这里暂时直接添加
+                self.scroll_layout.addWidget(section)
+                self.date_sections[date_str] = section
+            
+            section = self.date_sections[date_str]
+            
+            # 创建 Item
+            entry = os.path.basename(full_path)
+            item = QListWidgetItem(entry)
+            item.setData(Qt.ItemDataRole.UserRole, full_path)
+            
+            # 默认图标
+            default_pix = QPixmap(100, 100)
+            default_pix.fill(QColor("#333"))
+            item.setIcon(QIcon(default_pix))
+            
+            # 默认选中
+            item.setSelected(True) 
+            
+            section.add_item(item)
+            self.path_to_item[full_path] = item
+            
+        self.scroll_area.setUpdatesEnabled(True)
+            
+        # 请求加载这些新文件的缩略图
+        if new_files:
+            self.request_load.emit(new_files)
+            
+        self.status_label.setText(f"已发现 {len(self.current_files)} 个文件...")
+        
+        # 触发一次选择更新
+        self.on_grid_selection_changed()
+
+    def on_scan_finished(self):
+        """扫描完成"""
+        self.status_label.setText(f"扫描完成，共 {len(self.current_files)} 个文件")
+        # 扫描结束后执行一次重复检测
+        self.update_grid_filter()
 
     def update_grid_filter(self):
         """根据当前设置隐藏重复文件"""
@@ -676,66 +1073,64 @@ class LightroomImport(QMainWindow):
         self.updating_tree = True # 借用该标志防止递归刷新
         self.duplicate_files.clear()
         
-        for i in range(self.grid_list.count()):
-            item = self.grid_list.item(i)
-            file_path = item.data(Qt.ItemDataRole.UserRole)
-            
-            is_duplicate = False
-            if self.organize_checkbox.isChecked():
-                # 计算目标路径
-                path_str = self.get_path_from_file(file_path, use_template=bool(self.custom_template))
-                target_full_path = os.path.join(self.target_directory, path_str)
-                dest_file = os.path.join(target_full_path, os.path.basename(file_path))
+        # 遍历所有分组的所有 Item
+        for section in self.date_sections.values():
+            list_widget = section.list_widget
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                file_path = item.data(Qt.ItemDataRole.UserRole)
                 
-                if os.path.exists(dest_file) and self.files_are_identical(file_path, dest_file):
-                    is_duplicate = True
-                    self.duplicate_files.add(file_path)
-            
-            # 隐藏并取消勾选重复文件
-            item.setHidden(is_duplicate)
-            if is_duplicate:
-                item.setCheckState(Qt.CheckState.Unchecked)
-            else:
-                # 恢复显示的项应默认选中，除非用户手动取消过（此处简单处理为显示即选中）
-                item.setCheckState(Qt.CheckState.Checked)
+                is_duplicate = False
+                if self.organize_checkbox.isChecked():
+                    # 计算目标路径
+                    path_str = self.get_path_from_file(file_path, use_template=bool(self.custom_template))
+                    target_full_path = os.path.join(self.target_directory, path_str)
+                    dest_file = os.path.join(target_full_path, os.path.basename(file_path))
+                    
+                    if os.path.exists(dest_file) and self.files_are_identical(file_path, dest_file):
+                        is_duplicate = True
+                        self.duplicate_files.add(file_path)
+                
+                # 隐藏并取消勾选重复文件
+                item.setHidden(is_duplicate)
+                if is_duplicate:
+                    item.setSelected(False)
+                # else:
+                #     item.setSelected(True) # 不强制选中，保留用户选择
         
         self.updating_tree = False
         self.on_grid_selection_changed() # 刷新统计和右侧树
 
     def update_thumbnail(self, file_path, icon):
-        # 在 Grid 中找到对应的 Item 并更新图标
-        for i in range(self.grid_list.count()):
-            item = self.grid_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == file_path:
-                item.setIcon(icon)
-                break
+        # 通过映射直接找到 Item
+        if file_path in self.path_to_item:
+            item = self.path_to_item[file_path]
+            item.setIcon(icon)
     
     def on_grid_selection_changed(self):
         """更新选择信息和预览"""
         if self.updating_tree: # 防止在 update_grid_filter 时重复刷新
             return
             
-        # 收集所有勾选的文件
+        # 收集所有选中的文件
         self.selected_items.clear()
-        for i in range(self.grid_list.count()):
-            item = self.grid_list.item(i)
-            # 仅统计未隐藏且勾选的文件
-            if not item.isHidden() and item.checkState() == Qt.CheckState.Checked:
-                self.selected_items.add(item.data(Qt.ItemDataRole.UserRole))
+        last_selected_path = None
+        
+        for section in self.date_sections.values():
+            for item in section.list_widget.selectedItems():
+                if not item.isHidden():
+                    path = item.data(Qt.ItemDataRole.UserRole)
+                    self.selected_items.add(path)
+                    last_selected_path = path
         
         # 更新统计
         self.stats_label.setText(f"已选择: {len(self.selected_items)} 文件")
         
-        # 刷新目标树，显示导入预览（实时更新）
+        # 刷新目标树
         self.refresh_target_tree()
         
-        # 显示第一个勾选文件的预览 (保持不变)
-        selected_grid_items = self.grid_list.selectedItems()
-        if selected_grid_items and not selected_grid_items[0].isHidden():
-            file_path = selected_grid_items[0].data(Qt.ItemDataRole.UserRole)
-            self.update_preview(file_path)
-        else:
-            self.update_preview(None)
+        # 显示最后一个选中文件的预览
+        self.update_preview(last_selected_path)
     
     def update_preview(self, file_path):
         """更新预览面板"""
@@ -744,23 +1139,42 @@ class LightroomImport(QMainWindow):
             self.file_info_label.setText("未选择文件")
             return
         
-        # 加载并显示缩略图
-        pixmap = QPixmap(file_path)
+        # 尝试加载并显示缩略图/原图
+        pixmap = QPixmap()
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext in ['.arw', '.cr2', '.nef', '.dng', '.orf', '.rw2']:
+            # 对于预览面板，我们尝试快速读取内嵌 JPEG
+            try:
+                with rawpy.imread(file_path) as raw:
+                    try:
+                        thumb = raw.extract_thumb()
+                    except rawpy.LibRawNoThumbnailError:
+                        thumb = None
+                    
+                    if thumb and thumb.format == rawpy.ThumbFormat.JPEG:
+                        qimg = QImage.fromData(thumb.data)
+                        if not qimg.isNull():
+                            pixmap = QPixmap.fromImage(qimg)
+                    else:
+                        # 如果没有内嵌预览，使用半尺寸解码 (预览不需要全尺寸)
+                        rgb = raw.postprocess(use_camera_wb=True, bright=1.0, user_sat=None, no_auto_bright=True, half_size=True)
+                        h, w, ch = rgb.shape
+                        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+                        if not qimg.isNull():
+                            pixmap = QPixmap.fromImage(qimg)
+            except Exception:
+                pass # 如果 RAW 读取失败，将在下面处理为空的情况
+        else:
+            # 普通图片直接加载
+            pixmap.load(file_path)
+
         if not pixmap.isNull():
-            scaled = pixmap.scaled(200, 160, Qt.AspectRatioMode.KeepAspectRatio)
+            scaled = pixmap.scaled(200, 160, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.preview_label.setPixmap(scaled)
         else:
-            ext = os.path.splitext(file_path)[1].lower()
-            if ext in ['.arw', '.cr2', '.nef', '.dng']:
-                pix = QPixmap(200, 160)
-                pix.fill(QColor("#404040"))
-                from PyQt6.QtGui import QPainter
-                painter = QPainter(pix)
-                painter.setPen(Qt.GlobalColor.white)
-                painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, f"RAW\n{ext}")
-                painter.end()
-                self.preview_label.setPixmap(pix)
-            elif ext in ['.mp4', '.mov', '.avi']:
+            # 失败或视频文件的占位符
+            if ext in ['.mp4', '.mov', '.avi']:
                 pix = QPixmap(200, 160)
                 pix.fill(QColor("#2a4a60"))
                 from PyQt6.QtGui import QPainter
@@ -769,6 +1183,8 @@ class LightroomImport(QMainWindow):
                 painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, f"VIDEO\n{ext}")
                 painter.end()
                 self.preview_label.setPixmap(pix)
+            else:
+                self.preview_label.setText(f"无法预览\n{ext}")
         
         # 文件信息
         filename = os.path.basename(file_path)
@@ -910,20 +1326,12 @@ class LightroomImport(QMainWindow):
                 file_dir = self.get_path_from_file(file_path, use_template=bool(self.custom_template))
                 if file_dir == path_str:
                     # 在网格中找到对应项并更新勾选
-                    for i in range(self.grid_list.count()):
-                        grid_item = self.grid_list.item(i)
-                        if grid_item.data(Qt.ItemDataRole.UserRole) == file_path:
-                            grid_item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-                            break
-                    
-                    # 从selected_items中移除或添加
-                    if not checked:
-                        self.selected_items.discard(file_path)
-                    else:
-                        self.selected_items.add(file_path)
+                    if file_path in self.path_to_item:
+                        grid_item = self.path_to_item[file_path]
+                        grid_item.setSelected(checked)
             
-            # 刷新统计（不刷新树以避免递归）
-            self.stats_label.setText(f"已选择: {len(self.selected_items)} 文件")
+            # 刷新统计
+            self.on_grid_selection_changed()
     
     def refresh_file_tree(self):
         """刷新文件树并展开目标目录"""
@@ -1132,7 +1540,7 @@ class LightroomImport(QMainWindow):
                 full_path = os.path.join(directory, entry)
                 if os.path.isdir(full_path) and not entry.startswith('.'):
                     item = QTreeWidgetItem(parent_item)
-                    item.setText(0, f"📁 {entry}")
+                    item.setText(0, f"{entry}")
                     item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
                     # 存储原始名称用于匹配
                     item.setData(0, Qt.ItemDataRole.UserRole + 2, entry)
@@ -1146,7 +1554,7 @@ class LightroomImport(QMainWindow):
                     full_path = os.path.join(directory, entry)
                     if os.path.isfile(full_path) and not entry.startswith('.'):
                         item = QTreeWidgetItem(parent_item)
-                        item.setText(0, f"📄 {entry}")
+                        item.setText(0, f"{entry}")
                         item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_FileIcon))
         except PermissionError:
             pass
@@ -1186,7 +1594,7 @@ class LightroomImport(QMainWindow):
                     item = found_item
                 else:
                     item = QTreeWidgetItem(parent_item)
-                    item.setText(0, f"📁 {part}")
+                    item.setText(0, f"{part} （{file_count}）")
                     item.setIcon(0, self.style().standardIcon(self.style().StandardPixmap.SP_DirIcon))
                     item.setData(0, Qt.ItemDataRole.UserRole + 2, part)
                 
