@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(LightroomImportClone_C LANGUAGES C)
+project(LightroomImportClone_C_XP LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -21,28 +21,36 @@ set(HEADERS
 )
 
 if(WIN32)
-    # Windows-specific build
-    add_executable(LightroomImportClone_C WIN32 ${SOURCES} ${HEADERS})
+    # Windows XP specific build
+    add_executable(LightroomImportClone_C_XP WIN32 ${SOURCES} ${HEADERS})
+    
+    # Define Windows XP compatibility macro
+    target_compile_definitions(LightroomImportClone_C_XP PRIVATE BUILD_FOR_XP)
     
     # Link Windows libraries
-    target_link_libraries(LightroomImportClone_C 
+    target_link_libraries(LightroomImportClone_C_XP 
         comctl32
         shlwapi
         shell32
         ole32
     )
     
-    # Set subsystem to Windows
+    # Set subsystem to Windows with XP compatibility
     if(MSVC)
-        set_target_properties(LightroomImportClone_C PROPERTIES
-            LINK_FLAGS "/SUBSYSTEM:WINDOWS"
+        set_target_properties(LightroomImportClone_C_XP PROPERTIES
+            LINK_FLAGS "/SUBSYSTEM:WINDOWS,5.01"
         )
+        
+        # Use XP-compatible platform toolset if available
+        if(CMAKE_GENERATOR_TOOLSET MATCHES "v141_xp")
+            message(STATUS "Using XP-compatible toolset: ${CMAKE_GENERATOR_TOOLSET}")
+        endif()
     endif()
 else()
     message(FATAL_ERROR "This C implementation is Windows-only. Use the Qt C++ version for cross-platform support.")
 endif()
 
 # Install target
-install(TARGETS LightroomImportClone_C
+install(TARGETS LightroomImportClone_C_XP
     RUNTIME DESTINATION bin
 )
