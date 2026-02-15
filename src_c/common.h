@@ -36,6 +36,8 @@
 #define ID_DATE_FORMAT_COMBO 1012
 #define ID_STATUS_TEXT 1013
 #define ID_CUSTOM_TEMPLATE_EDIT 1014
+#define ID_PREVIEW_BUTTON 1015
+#define ID_PREVIEW_TREE 1016
 
 // File information structure
 typedef struct {
@@ -60,6 +62,7 @@ typedef struct {
     HWND hwndMoveRadio;
     HWND hwndDateFormatCombo;
     HWND hwndCustomTemplateEdit;
+    HWND hwndPreviewTree;
     
     FileInfo* files;
     int fileCount;

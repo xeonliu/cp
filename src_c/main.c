@@ -17,6 +17,8 @@ void CreateUI(HWND hwnd);
 void OnScanClick();
 void OnImportClick();
 void OnBrowseTargetClick();
+void OnPreviewClick();
+void UpdatePreviewTree();
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     // Initialize common controls
@@ -135,8 +137,17 @@ void CreateUI(HWND hwnd) {
     
     g_app.hwndFileList = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
                                          WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                                         310, y + 30, 400, 400, hwnd, (HMENU)ID_FILE_LIST, NULL, NULL);
+                                         310, y + 30, 180, 400, hwnd, (HMENU)ID_FILE_LIST, NULL, NULL);
     SendMessage(g_app.hwndFileList, WM_SETFONT, (WPARAM)hFont, TRUE);
+    
+    // Preview tree
+    CreateWindowW(L"STATIC", L"Preview Structure:", WS_VISIBLE | WS_CHILD,
+                 500, y, 200, 25, hwnd, NULL, NULL, NULL);
+    
+    g_app.hwndPreviewTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEW, L"",
+                                            WS_VISIBLE | WS_CHILD | WS_BORDER | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
+                                            500, y + 30, 210, 400, hwnd, (HMENU)ID_PREVIEW_TREE, NULL, NULL);
+    SendMessage(g_app.hwndPreviewTree, WM_SETFONT, (WPARAM)hFont, TRUE);
     
     // Target section
     y = 10;
@@ -209,10 +220,15 @@ void CreateUI(HWND hwnd) {
     
     y += 60;
     
-    // Import button
+    // Preview and Import buttons
+    HWND hPreviewBtn = CreateWindowW(L"BUTTON", L"Preview Structure",
+                                     WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                                     730, y, 150, 40, hwnd, (HMENU)ID_PREVIEW_BUTTON, NULL, NULL);
+    SendMessage(hPreviewBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+    
     HWND hImportBtn = CreateWindowW(L"BUTTON", L"Import Files",
                                     WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                                    730, y, 200, 40, hwnd, (HMENU)ID_IMPORT_BUTTON, NULL, NULL);
+                                    890, y, 150, 40, hwnd, (HMENU)ID_IMPORT_BUTTON, NULL, NULL);
     SendMessage(hImportBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
     
     y += 50;
@@ -298,6 +314,137 @@ void OnBrowseTargetClick() {
     }
 }
 
+void OnPreviewClick() {
+    UpdatePreviewTree();
+}
+
+// Structure to hold folder information for tree building
+typedef struct FolderNode {
+    wchar_t path[MAX_PATH_LEN];
+    int fileCount;
+    struct FolderNode* next;
+} FolderNode;
+
+void UpdatePreviewTree() {
+    // Clear existing tree
+    TreeView_DeleteAllItems(g_app.hwndPreviewTree);
+    
+    if (g_app.fileCount == 0) {
+        SetWindowTextW(g_app.hwndStatusText, L"No files to preview. Please scan first.");
+        return;
+    }
+    
+    // Get current settings
+    bool organizeByDate = (SendMessage(g_app.hwndOrganizeCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    int dateFormatIndex = (int)SendMessage(g_app.hwndDateFormatCombo, CB_GETCURSEL, 0, 0);
+    wchar_t customTemplate[256];
+    GetWindowTextW(g_app.hwndCustomTemplateEdit, customTemplate, 256);
+    
+    // Get target path
+    wchar_t targetPath[MAX_PATH_LEN];
+    GetWindowTextW(g_app.hwndTargetEdit, targetPath, MAX_PATH_LEN);
+    
+    // Build folder structure
+    FolderNode* folders = NULL;
+    int totalFiles = 0;
+    
+    EnterCriticalSection(&g_app.csFiles);
+    
+    for (int i = 0; i < g_app.fileCount; i++) {
+        FileInfo* file = &g_app.files[i];
+        wchar_t folderPath[MAX_PATH_LEN];
+        
+        if (organizeByDate) {
+            wchar_t dateSubdir[256];
+            
+            // Use custom template if selected
+            if (customTemplate && wcslen(customTemplate) > 0 && dateFormatIndex == 7) {
+                // We need to include the GetDateSubdirectoryFromTemplate function
+                extern void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTemplate, wchar_t* outPath, size_t outSize);
+                GetDateSubdirectoryFromTemplate(&file->fileTime, customTemplate, dateSubdir, 256);
+            } else {
+                extern void GetDateSubdirectory(const FILETIME* ft, int formatIndex, wchar_t* outPath, size_t outSize);
+                GetDateSubdirectory(&file->fileTime, dateFormatIndex, dateSubdir, 256);
+            }
+            
+            if (wcslen(dateSubdir) > 0) {
+                swprintf_s(folderPath, MAX_PATH_LEN, L"%s", dateSubdir);
+            } else {
+                wcscpy_s(folderPath, MAX_PATH_LEN, L"(root)");
+            }
+        } else {
+            wcscpy_s(folderPath, MAX_PATH_LEN, L"(root)");
+        }
+        
+        // Find or create folder node
+        FolderNode* current = folders;
+        FolderNode* prev = NULL;
+        bool found = false;
+        
+        while (current != NULL) {
+            if (wcscmp(current->path, folderPath) == 0) {
+                current->fileCount++;
+                found = true;
+                break;
+            }
+            prev = current;
+            current = current->next;
+        }
+        
+        if (!found) {
+            FolderNode* newNode = (FolderNode*)malloc(sizeof(FolderNode));
+            wcscpy_s(newNode->path, MAX_PATH_LEN, folderPath);
+            newNode->fileCount = 1;
+            newNode->next = NULL;
+            
+            if (prev == NULL) {
+                folders = newNode;
+            } else {
+                prev->next = newNode;
+            }
+        }
+        
+        totalFiles++;
+    }
+    
+    LeaveCriticalSection(&g_app.csFiles);
+    
+    // Build tree view
+    TVINSERTSTRUCT tvis = {0};
+    tvis.hParent = TVI_ROOT;
+    tvis.hInsertAfter = TVI_LAST;
+    tvis.item.mask = TVIF_TEXT;
+    
+    // Add root node showing target path
+    wchar_t rootText[MAX_PATH_LEN + 50];
+    swprintf_s(rootText, MAX_PATH_LEN + 50, L"%s (%d files)", targetPath, totalFiles);
+    tvis.item.pszText = rootText;
+    HTREEITEM hRoot = TreeView_InsertItem(g_app.hwndPreviewTree, &tvis);
+    
+    // Add folder nodes
+    FolderNode* current = folders;
+    while (current != NULL) {
+        wchar_t nodeText[MAX_PATH_LEN + 50];
+        swprintf_s(nodeText, MAX_PATH_LEN + 50, L"%s (%d files)", current->path, current->fileCount);
+        
+        tvis.hParent = hRoot;
+        tvis.item.pszText = nodeText;
+        TreeView_InsertItem(g_app.hwndPreviewTree, &tvis);
+        
+        FolderNode* next = current->next;
+        free(current);
+        current = next;
+    }
+    
+    // Expand root node
+    TreeView_Expand(g_app.hwndPreviewTree, hRoot, TVE_EXPAND);
+    
+    // Update status
+    wchar_t statusText[256];
+    swprintf_s(statusText, 256, L"Preview generated: %d files", totalFiles);
+    SetWindowTextW(g_app.hwndStatusText, statusText);
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_COMMAND:
@@ -310,6 +457,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 case ID_TARGET_BROWSE:
                     OnBrowseTargetClick();
+                    break;
+                case ID_PREVIEW_BUTTON:
+                    OnPreviewClick();
+                    break;
+                case ID_ORGANIZE_CHECK:
+                case ID_DATE_FORMAT_COMBO:
+                    // Auto-update preview when settings change
+                    if (HIWORD(wParam) == CBN_SELCHANGE || LOWORD(wParam) == ID_ORGANIZE_CHECK) {
+                        UpdatePreviewTree();
+                    }
                     break;
             }
             break;
