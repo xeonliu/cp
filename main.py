@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QFrame, QButtonGroup, QAbstractItemView, QFileDialog,
                              QMessageBox, QScrollBar, QSpinBox, QTreeWidget, QTreeWidgetItem,
                              QComboBox, QLineEdit, QRadioButton, QToolButton, QSizePolicy)
-from PyQt6.QtCore import Qt, QSize, QDir, QThread, pyqtSignal, QObject, QMutex, QWaitCondition, QTimer
+from PyQt6.QtCore import Qt, QSize, QDir, QThread, pyqtSignal, QObject, QMutex, QWaitCondition, QTimer, QPoint, QRect
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction, QFileSystemModel, QPalette, QImage
 
 # --- 样式表 (Dark Mode) ---
@@ -559,6 +559,12 @@ class LightroomImport(QMainWindow):
         self.last_skipped_duplicates = 0
         self.thumbnails_enabled = False
         self.path_cache = {}
+        self.loaded_thumbnails = set()
+        self.loading_thumbnails = set()
+        self.thumbnail_check_timer = QTimer(self)
+        self.thumbnail_check_timer.setSingleShot(True)
+        self.thumbnail_check_timer.timeout.connect(self.update_visible_thumbnails)
+        self.thumbnail_check_delay_ms = 100
         self.preview_refresh_timer = QTimer(self)
         self.preview_refresh_timer.setSingleShot(True)
         self.preview_refresh_timer.timeout.connect(self.refresh_target_tree)
@@ -742,6 +748,7 @@ class LightroomImport(QMainWindow):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: #1b1b1b; }")
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self.schedule_thumbnail_check)
         
         self.scroll_content = QWidget()
         self.scroll_content.setStyleSheet("background-color: #1b1b1b;")
@@ -1027,6 +1034,8 @@ class LightroomImport(QMainWindow):
         self.selected_items.clear()
         self.duplicate_files.clear()
         self.path_cache.clear()
+        self.loaded_thumbnails.clear()
+        self.loading_thumbnails.clear()
         self.update_preview(None)
         
         recursive = self.recursive_check.isChecked()
@@ -1069,6 +1078,7 @@ class LightroomImport(QMainWindow):
             entry = os.path.basename(full_path)
             item = QListWidgetItem(entry)
             item.setData(Qt.ItemDataRole.UserRole, full_path)
+            item.setData(Qt.ItemDataRole.UserRole + 1, False)
             
             # 默认图标
             default_pix = QPixmap(100, 100)
@@ -1082,10 +1092,8 @@ class LightroomImport(QMainWindow):
             self.path_to_item[full_path] = item
             
         self.scroll_area.setUpdatesEnabled(True)
-            
-        if new_files and self.thumbnails_enabled:
-            self.request_load.emit(new_files)
-            
+        self.schedule_thumbnail_check()
+
         self.status_label.setText(f"已发现 {len(self.current_files)} 个文件...")
         
         # 触发一次选择更新
@@ -1132,10 +1140,13 @@ class LightroomImport(QMainWindow):
         self.on_grid_selection_changed() # 刷新统计和右侧树
 
     def update_thumbnail(self, file_path, icon):
-        # 通过映射直接找到 Item
         if file_path in self.path_to_item:
             item = self.path_to_item[file_path]
             item.setIcon(icon)
+            item.setData(Qt.ItemDataRole.UserRole + 1, True)
+        self.loaded_thumbnails.add(file_path)
+        if file_path in self.loading_thumbnails:
+            self.loading_thumbnails.remove(file_path)
     
     def on_grid_selection_changed(self):
         """更新选择信息和预览"""
@@ -1348,6 +1359,8 @@ class LightroomImport(QMainWindow):
 
     def on_thumbnail_toggle_changed(self, state):
         self.thumbnails_enabled = (state == Qt.CheckState.Checked.value)
+        if self.thumbnails_enabled:
+            self.schedule_thumbnail_check()
     
     def on_tree_item_changed(self, item, column):
         """目录树项勾选状态改变回调"""
@@ -1496,6 +1509,55 @@ class LightroomImport(QMainWindow):
         if self.updating_tree:
             return
         self.preview_refresh_timer.start(self.preview_refresh_delay_ms)
+
+    def schedule_thumbnail_check(self):
+        if not self.thumbnails_enabled:
+            return
+        self.thumbnail_check_timer.start(self.thumbnail_check_delay_ms)
+
+    def update_visible_thumbnails(self):
+        if not self.thumbnails_enabled:
+            return
+        if not self.date_sections:
+            return
+        viewport = self.scroll_area.viewport()
+        visible_rect = QRect(QPoint(0, 0), viewport.size())
+        batch = []
+        max_batch = 32
+        for section in self.date_sections.values():
+            lw = section.list_widget
+            if lw.isHidden():
+                continue
+            top_left = lw.mapTo(viewport, QPoint(0, 0))
+            lw_rect = QRect(top_left, lw.size())
+            if not lw_rect.intersects(visible_rect):
+                continue
+            for i in range(lw.count()):
+                item = lw.item(i)
+                if not item or item.isHidden():
+                    continue
+                item_rect_local = lw.visualItemRect(item)
+                item_top_left = lw.mapTo(viewport, item_rect_local.topLeft())
+                item_rect_view = QRect(item_top_left, item_rect_local.size())
+                if not item_rect_view.intersects(visible_rect):
+                    continue
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if not path:
+                    continue
+                if path in self.loaded_thumbnails or path in self.loading_thumbnails:
+                    continue
+                loaded_flag = item.data(Qt.ItemDataRole.UserRole + 1)
+                if loaded_flag:
+                    self.loaded_thumbnails.add(path)
+                    continue
+                batch.append(path)
+                self.loading_thumbnails.add(path)
+                if len(batch) >= max_batch:
+                    break
+            if len(batch) >= max_batch:
+                break
+        if batch:
+            self.request_load.emit(batch)
     
     def get_exif_datetime(self, file_path):
         """尝试从 EXIF 获取拍摄时间"""
