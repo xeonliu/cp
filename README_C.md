@@ -294,7 +294,9 @@ BOOL MoveFileW(
 **Maximum Files**: Limited by available memory
 - Each `FileInfo` structure: ~4 KB
 - 100,000 files ≈ 400 MB RAM
-- Practical limit: ~1 million files per scan
+- 1,000,000 files ≈ 4 GB RAM
+- **Practical limit on 32-bit**: ~500,000 files (due to 2GB user-mode limit)
+- **Practical limit on 64-bit**: ~1 million files (disk I/O becomes bottleneck)
 
 **Maximum File Size**: No hardcoded limit
 - Limited by available disk space
@@ -362,7 +364,8 @@ BOOL MoveFileW(
 | Current File Display | No | Yes (during import) |
 | Folder Navigation | Tree view | Expandable tree with lazy loading |
 | Custom Templates | Limited | Full support with placeholders |
-| Preview | Yes | Tree structure preview only |
+| Image Preview | Yes (thumbnails) | No (excluded per requirements) |
+| Folder Preview | No | Yes (tree structure preview) |
 | UI Framework | Qt Widgets | Native WinAPI |
 
 ## Key Limitations Summary

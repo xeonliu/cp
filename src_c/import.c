@@ -273,7 +273,9 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
         
         // Update status with speed information
         DWORD elapsedMs = GetTickCount() - g_app.importStartTime;
-        if (elapsedMs > 0) {
+        // Only calculate speed after at least 1 second to avoid division by very small numbers
+        // Also handles GetTickCount() wrap-around (occurs every 49.7 days)
+        if (elapsedMs >= 1000 && elapsedMs < 0x80000000) {
             // Calculate speed in MB/s
             double elapsedSec = elapsedMs / 1000.0;
             double speedMBps = (g_app.totalBytesProcessed / (1024.0 * 1024.0)) / elapsedSec;
@@ -286,6 +288,16 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
             wchar_t statusText[512];
             swprintf_s(statusText, 512, L"Importing: %d/%d (%.1f MB/s, %d duplicates) - %s", 
                       processedFiles, totalFiles, speedMBps, skippedDuplicates, currentFileName);
+            SetWindowTextW(g_app.hwndStatusText, statusText);
+        } else {
+            // Show status without speed if not enough time has elapsed
+            const wchar_t* currentFileName = wcsrchr(g_app.currentFile, L'\\');
+            if (currentFileName) currentFileName++;
+            else currentFileName = g_app.currentFile;
+            
+            wchar_t statusText[512];
+            swprintf_s(statusText, 512, L"Importing: %d/%d (%d duplicates) - %s", 
+                      processedFiles, totalFiles, skippedDuplicates, currentFileName);
             SetWindowTextW(g_app.hwndStatusText, statusText);
         }
     }
