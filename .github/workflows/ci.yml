@@ -33,7 +33,11 @@ jobs:
 
   build-desktop:
     needs: lint-and-check
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +59,5 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cp-macos-build
-          path: dist/cp.app
-
+          name: cp-${{ matrix.os }}-build
+          path: dist

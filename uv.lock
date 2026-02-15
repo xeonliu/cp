@@ -14,7 +14,7 @@ wheels = [
 [[package]]
 name = "cp"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "psutil" },
     { name = "pyqt6" },
