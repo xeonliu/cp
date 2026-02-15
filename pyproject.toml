@@ -1,13 +1,28 @@
 [project]
 name = "cp"
 version = "0.1.0"
-description = "Add your description here"
+description = "CP (CardCopier): desktop card import and copy tool"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "imageio>=2.37.2",
-    "numpy>=2.4.2",
     "psutil>=7.2.2",
     "pyqt6>=6.10.2",
     "rawpy>=0.26.1",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.7.0",
+    "pyinstaller>=6.11.0",
+]
+
+[project.scripts]
+cp = "cp:run_app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = []
