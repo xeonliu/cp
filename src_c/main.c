@@ -19,6 +19,7 @@ void OnImportClick();
 void OnBrowseTargetClick();
 void OnPreviewClick();
 void UpdatePreviewTree();
+void PopulateTreeChildren(HTREEITEM hParent);
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     // Initialize common controls
@@ -104,16 +105,23 @@ void CreateUI(HWND hwnd) {
                                            10, y + 30, 280, 200, hwnd, (HMENU)ID_SOURCE_TREE, NULL, NULL);
     SendMessage(g_app.hwndSourceTree, WM_SETFONT, (WPARAM)hFont, TRUE);
     
-    // Add some default drives to tree
-    TVINSERTSTRUCT tvis = {0};
-    tvis.hParent = TVI_ROOT;
-    tvis.hInsertAfter = TVI_LAST;
-    tvis.item.mask = TVIF_TEXT;
-    
+    // Add drives to tree with expandable folders
     wchar_t drives[256];
     GetLogicalDriveStringsW(256, drives);
     for (wchar_t* drive = drives; *drive; drive += wcslen(drive) + 1) {
+        TVINSERTSTRUCT tvis = {0};
+        tvis.hParent = TVI_ROOT;
+        tvis.hInsertAfter = TVI_LAST;
+        tvis.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
         tvis.item.pszText = drive;
+        tvis.item.cChildren = 1; // Indicate it has children (will load on expand)
+        
+        // Allocate and store full path
+        TreeItemData* itemData = (TreeItemData*)malloc(sizeof(TreeItemData));
+        wcscpy_s(itemData->fullPath, MAX_PATH_LEN, drive);
+        itemData->childrenLoaded = false;
+        tvis.item.lParam = (LPARAM)itemData;
+        
         TreeView_InsertItem(g_app.hwndSourceTree, &tvis);
     }
     
@@ -247,6 +255,71 @@ void CreateUI(HWND hwnd) {
     SendMessage(g_app.hwndStatusText, WM_SETFONT, (WPARAM)hFont, TRUE);
 }
 
+void PopulateTreeChildren(HTREEITEM hParent) {
+    // Get parent item data
+    TVITEMW tvi;
+    tvi.mask = TVIF_PARAM;
+    tvi.hItem = hParent;
+    TreeView_GetItem(g_app.hwndSourceTree, &tvi);
+    
+    TreeItemData* parentData = (TreeItemData*)tvi.lParam;
+    if (!parentData || parentData->childrenLoaded) {
+        return; // Already loaded
+    }
+    
+    // Mark as loaded
+    parentData->childrenLoaded = true;
+    
+    // Build search path
+    wchar_t searchPath[MAX_PATH_LEN];
+    swprintf_s(searchPath, MAX_PATH_LEN, L"%s*", parentData->fullPath);
+    
+    // Find subdirectories
+    WIN32_FIND_DATAW findData;
+    HANDLE hFind = FindFirstFileW(searchPath, &findData);
+    
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    
+    do {
+        // Skip . and ..
+        if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+            continue;
+        }
+        
+        // Only add directories
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // Skip hidden and system directories
+            if (findData.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) {
+                continue;
+            }
+            
+            // Build full path
+            wchar_t fullPath[MAX_PATH_LEN];
+            swprintf_s(fullPath, MAX_PATH_LEN, L"%s%s\\", parentData->fullPath, findData.cFileName);
+            
+            // Add to tree
+            TVINSERTSTRUCT tvis = {0};
+            tvis.hParent = hParent;
+            tvis.hInsertAfter = TVI_LAST;
+            tvis.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+            tvis.item.pszText = findData.cFileName;
+            tvis.item.cChildren = 1; // Assume it might have children
+            
+            // Allocate and store full path
+            TreeItemData* itemData = (TreeItemData*)malloc(sizeof(TreeItemData));
+            wcscpy_s(itemData->fullPath, MAX_PATH_LEN, fullPath);
+            itemData->childrenLoaded = false;
+            tvis.item.lParam = (LPARAM)itemData;
+            
+            TreeView_InsertItem(g_app.hwndSourceTree, &tvis);
+        }
+    } while (FindNextFileW(hFind, &findData));
+    
+    FindClose(hFind);
+}
+
 void OnScanClick() {
     // Get selected tree item
     HTREEITEM hSelected = TreeView_GetSelection(g_app.hwndSourceTree);
@@ -255,19 +328,23 @@ void OnScanClick() {
         return;
     }
     
-    wchar_t itemText[MAX_PATH];
+    // Get item data containing full path
     TVITEMW tvi;
-    tvi.mask = TVIF_TEXT;
+    tvi.mask = TVIF_PARAM;
     tvi.hItem = hSelected;
-    tvi.pszText = itemText;
-    tvi.cchTextMax = MAX_PATH;
     TreeView_GetItem(g_app.hwndSourceTree, &tvi);
+    
+    TreeItemData* itemData = (TreeItemData*)tvi.lParam;
+    if (!itemData) {
+        MessageBoxW(g_app.hwndMain, L"Invalid folder selection", L"Error", MB_OK | MB_ICONERROR);
+        return;
+    }
     
     // Update recursive setting
     g_app.isRecursive = (SendMessage(g_app.hwndRecursiveCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     
-    // Start scan thread
-    wchar_t* pathCopy = _wcsdup(itemText);
+    // Start scan thread with full path
+    wchar_t* pathCopy = _wcsdup(itemData->fullPath);
     g_app.hScanThread = CreateThread(NULL, 0, ScanThread, pathCopy, 0, NULL);
 }
 
@@ -444,6 +521,19 @@ void UpdatePreviewTree() {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+        case WM_NOTIFY: {
+            LPNMHDR pnmhdr = (LPNMHDR)lParam;
+            
+            // Handle tree view item expanding
+            if (pnmhdr->idFrom == ID_SOURCE_TREE && pnmhdr->code == TVN_ITEMEXPANDING) {
+                LPNMTREEVIEW pnmtv = (LPNMTREEVIEW)lParam;
+                if (pnmtv->action == TVE_EXPAND) {
+                    PopulateTreeChildren(pnmtv->itemNew.hItem);
+                }
+            }
+            break;
+        }
+        
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
                 case ID_SCAN_BUTTON:
@@ -483,6 +573,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 WaitForSingleObject(g_app.hImportThread, 5000);
                 CloseHandle(g_app.hImportThread);
             }
+            
+            // Free tree item data
+            HTREEITEM hItem = TreeView_GetRoot(g_app.hwndSourceTree);
+            while (hItem) {
+                HTREEITEM hNext = TreeView_GetNextSibling(g_app.hwndSourceTree, hItem);
+                
+                // Free this item and its children recursively
+                TVITEMW tvi;
+                tvi.mask = TVIF_PARAM;
+                tvi.hItem = hItem;
+                if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
+                    free((TreeItemData*)tvi.lParam);
+                }
+                
+                // Free children
+                HTREEITEM hChild = TreeView_GetChild(g_app.hwndSourceTree, hItem);
+                while (hChild) {
+                    HTREEITEM hNextChild = TreeView_GetNextSibling(g_app.hwndSourceTree, hChild);
+                    tvi.hItem = hChild;
+                    if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
+                        free((TreeItemData*)tvi.lParam);
+                    }
+                    hChild = hNextChild;
+                }
+                
+                hItem = hNext;
+            }
+            
             PostQuitMessage(0);
             return 0;
     }

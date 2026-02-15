@@ -56,6 +56,12 @@ typedef struct {
     bool hashComputed;
 } FileInfo;
 
+// Tree item data structure for storing full path
+typedef struct {
+    wchar_t fullPath[MAX_PATH_LEN];
+    bool childrenLoaded;
+} TreeItemData;
+
 // Application state
 typedef struct {
     HWND hwndMain;
