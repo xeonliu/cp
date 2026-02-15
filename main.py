@@ -152,7 +152,7 @@ class ScannerWorker(QObject):
     def __init__(self):
         super().__init__()
         self.is_running = False
-        self.valid_extensions = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.nef', '.dng', '.mp4', '.mov'}
+        self.valid_extensions = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.nef', '.dng', '.rw2', '.mp4', '.mov'}
 
     def scan(self, root_path, recursive):
         self.is_running = True
@@ -397,7 +397,7 @@ class AutoHeightListWidget(QListWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff) # 关闭内部滚动
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection) # 修复多选问题
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.setIconSize(QSize(160, 120))
         self.setGridSize(QSize(180, 160)) # 统一网格大小
         self.setViewMode(QListWidget.ViewMode.IconMode)
@@ -433,6 +433,7 @@ class AutoHeightListWidget(QListWidget):
 # --- 日期分组组件 ---
 class DateSection(QWidget):
     selection_changed = pyqtSignal() # 当内部选择发生变化时
+    thumbnail_clicked = pyqtSignal(str)
 
     def __init__(self, date_str, parent=None):
         super().__init__(parent)
@@ -474,7 +475,8 @@ class DateSection(QWidget):
         
         # 内容区域 (ListWidget)
         self.list_widget = AutoHeightListWidget()
-        self.list_widget.itemSelectionChanged.connect(self.on_list_selection_changed)
+        self.list_widget.itemChanged.connect(self.on_item_check_changed)
+        self.list_widget.itemClicked.connect(self.on_item_clicked)
         self.layout.addWidget(self.list_widget)
 
     def toggle_content(self):
@@ -494,17 +496,23 @@ class DateSection(QWidget):
         # 头部勾选 -> 全选/全不选内部
         is_checked = (state == Qt.CheckState.Checked.value)
         self.list_widget.blockSignals(True) # 防止递归触发
-        if is_checked:
-            self.list_widget.selectAll()
-        else:
-            self.list_widget.clearSelection()
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if is_checked:
+                item.setCheckState(Qt.CheckState.Checked)
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
         self.list_widget.blockSignals(False)
         self.selection_changed.emit()
 
-    def on_list_selection_changed(self):
+    def on_item_check_changed(self, item):
         # 内部选择变化 -> 更新头部勾选状态
-        selected = len(self.list_widget.selectedItems())
         total = self.list_widget.count()
+        selected = 0
+        for i in range(total):
+            it = self.list_widget.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                selected += 1
         
         self.checkbox.blockSignals(True)
         if selected == 0:
@@ -516,6 +524,11 @@ class DateSection(QWidget):
         self.checkbox.blockSignals(False)
         
         self.selection_changed.emit()
+
+    def on_item_clicked(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path:
+            self.thumbnail_clicked.emit(path)
 
 # --- 主窗口 ---
 class LightroomImport(QMainWindow):
@@ -542,6 +555,8 @@ class LightroomImport(QMainWindow):
         self.custom_template = ''
         self.updating_tree = False  # 防止递归更新
         self.duplicate_files = set()  # 存储重复文件的路径
+        self.last_import_count = 0
+        self.last_skipped_duplicates = 0
         
         # 初始化 UI
         self.setup_ui()
@@ -946,6 +961,11 @@ class LightroomImport(QMainWindow):
     def on_device_clicked(self, item):
         """点击设备列表项"""
         path = item.data(Qt.ItemDataRole.UserRole)
+        
+        # 更新文件夹视图的根目录
+        index = self.fs_model.setRootPath(path)
+        self.tree_view.setRootIndex(index)
+        
         # 清除文件树的选择
         self.tree_view.clearSelection()
         self.start_scan(path)
@@ -1022,6 +1042,7 @@ class LightroomImport(QMainWindow):
             if date_str not in self.date_sections:
                 section = DateSection(date_str)
                 section.selection_changed.connect(self.on_grid_selection_changed)
+                section.thumbnail_clicked.connect(self.update_preview)
                 
                 # 按日期顺序插入 (简单的倒序插入，新的日期在上面)
                 # 如果需要严格排序，可能需要更复杂的逻辑，这里假设扫描顺序或直接追加
@@ -1042,8 +1063,8 @@ class LightroomImport(QMainWindow):
             default_pix.fill(QColor("#333"))
             item.setIcon(QIcon(default_pix))
             
-            # 默认选中
-            item.setSelected(True) 
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
             
             section.add_item(item)
             self.path_to_item[full_path] = item
@@ -1094,9 +1115,7 @@ class LightroomImport(QMainWindow):
                 # 隐藏并取消勾选重复文件
                 item.setHidden(is_duplicate)
                 if is_duplicate:
-                    item.setSelected(False)
-                # else:
-                #     item.setSelected(True) # 不强制选中，保留用户选择
+                    item.setCheckState(Qt.CheckState.Unchecked)
         
         self.updating_tree = False
         self.on_grid_selection_changed() # 刷新统计和右侧树
@@ -1112,16 +1131,18 @@ class LightroomImport(QMainWindow):
         if self.updating_tree: # 防止在 update_grid_filter 时重复刷新
             return
             
-        # 收集所有选中的文件
         self.selected_items.clear()
         last_selected_path = None
         
         for section in self.date_sections.values():
-            for item in section.list_widget.selectedItems():
-                if not item.isHidden():
+            list_widget = section.list_widget
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item and not item.isHidden() and item.checkState() == Qt.CheckState.Checked:
                     path = item.data(Qt.ItemDataRole.UserRole)
-                    self.selected_items.add(path)
-                    last_selected_path = path
+                    if path:
+                        self.selected_items.add(path)
+                        last_selected_path = path
         
         # 更新统计
         self.stats_label.setText(f"已选择: {len(self.selected_items)} 文件")
@@ -1214,10 +1235,13 @@ class LightroomImport(QMainWindow):
         if not self.selected_items:
             QMessageBox.warning(self, "提示", "请先选择要导入的文件")
             return
-        
-        # 获取选中的文件（排除重复的）
+
         files_to_import = list(self.selected_items - self.duplicate_files)
-        
+        duplicates_in_selection = self.selected_items & self.duplicate_files
+
+        self.last_import_count = len(files_to_import)
+        self.last_skipped_duplicates = len(duplicates_in_selection)
+
         if not files_to_import:
             QMessageBox.warning(self, "提示", "所有选择的文件都已存在（无重复导入）")
             return
@@ -1242,7 +1266,6 @@ class LightroomImport(QMainWindow):
         time_source = self.time_source
         custom_template = self.custom_template
         
-        # 确认对话框
         if organize_by_date:
             if custom_template:
                 preview_fmt = f"模板: {custom_template}"
@@ -1252,9 +1275,8 @@ class LightroomImport(QMainWindow):
         else:
             msg = f"即将导入 {len(files_to_import)} 个文件到: {self.target_directory}"
         
-        # 如果有重复文件，在确认对话框中告知
-        if self.duplicate_files:
-            msg += f"\n\n跳过 {len(self.duplicate_files)} 个重复文件（哈希相同）"
+        if self.last_skipped_duplicates:
+            msg += f"\n\n跳过 {self.last_skipped_duplicates} 个重复文件（哈希相同）"
         
         reply = QMessageBox.question(self, "确认导入", msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
@@ -1281,7 +1303,7 @@ class LightroomImport(QMainWindow):
         
         if success:
             self.status_label.setText("导入完成！")
-            QMessageBox.information(self, "成功", f"已导入 {len(self.selected_items)} 个文件到\n{self.target_directory}")
+            QMessageBox.information(self, "成功", f"已导入 {self.last_import_count} 个文件到\n{self.target_directory}")
             
             # 刷新文件树和目标树
             self.refresh_file_tree()
@@ -1316,21 +1338,15 @@ class LightroomImport(QMainWindow):
         if column != 0 or self.updating_tree:
             return
         
-        # 检查是否是虚拟文件夹项（斜体且有UserRole数据）
         if item.font(0).italic() and item.data(0, Qt.ItemDataRole.UserRole):
             path_str = item.data(0, Qt.ItemDataRole.UserRole)
             checked = item.checkState(0) == Qt.CheckState.Checked
             
-            # 更新对应文件的勾选状态
-            for file_path in list(self.selected_items):
+            for file_path, grid_item in self.path_to_item.items():
                 file_dir = self.get_path_from_file(file_path, use_template=bool(self.custom_template))
-                if file_dir == path_str:
-                    # 在网格中找到对应项并更新勾选
-                    if file_path in self.path_to_item:
-                        grid_item = self.path_to_item[file_path]
-                        grid_item.setSelected(checked)
+                if file_dir == path_str and not grid_item.isHidden():
+                    grid_item.setSelected(checked)
             
-            # 刷新统计
             self.on_grid_selection_changed()
     
     def refresh_file_tree(self):
