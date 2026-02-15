@@ -73,24 +73,27 @@ HANDLE hFind = FindFirstFileW(searchPath, &findData);
 
 ### Option 1: Using CMake
 ```cmd
-cmake -B build_c -DCMAKE_BUILD_TYPE=Release -S . -f CMakeLists_C.txt
-cmake --build build_c --config Release
+cd src_c
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ```
 
-The executable will be in `build_c\Release\LightroomImportClone_C.exe`
+The executable will be in `src_c\build\Release\LightroomImportClone_C.exe`
 
-### Option 2: Using NMAKE (Makefile)
+### Option 2: Using NMAKE (Makefile.msvc)
 ```cmd
-# Open Visual Studio Developer Command Prompt
-nmake /f Makefile
+cd src_c
+# Open Visual Studio Developer Command Prompt, or run vcvars64.bat
+nmake /f Makefile.msvc
 ```
 
-The executable will be `LightroomImportClone_C.exe`
+The executable will be `src_c\LightroomImportClone_C.exe`
 
 ### Option 3: Manual Compilation with MSVC
 ```cmd
+cd src_c
 cl /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
-   src_c/main.c src_c/scanner.c src_c/import.c src_c/hash.c ^
+   main.c scanner.c import.c hash.c ^
    /link /SUBSYSTEM:WINDOWS comctl32.lib shlwapi.lib shell32.lib ole32.lib ^
    /OUT:LightroomImportClone_C.exe
 ```

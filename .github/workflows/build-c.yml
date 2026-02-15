@@ -26,21 +26,24 @@ jobs:
     - name: Build C Version with CMake  
       run: cmake --build ${{github.workspace}}/build_c --config ${{env.BUILD_TYPE}}
 
-    - name: Build with Makefile (alternative)
+    - name: Build with NMAKE (alternative)
       shell: cmd
       run: |
+        cd src_c
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        nmake /f Makefile
+        nmake /f Makefile.msvc
 
     - name: Create Release Package
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path release
+        # Copy from CMake build
         if (Test-Path "build_c\Release\LightroomImportClone_C.exe") {
           Copy-Item "build_c\Release\LightroomImportClone_C.exe" release\
         }
-        if (Test-Path "LightroomImportClone_C.exe") {
-          Copy-Item "LightroomImportClone_C.exe" release\
+        # Copy from NMAKE build
+        if (Test-Path "src_c\LightroomImportClone_C.exe") {
+          Copy-Item "src_c\LightroomImportClone_C.exe" release\
         }
         # Create README for the release
         @"
