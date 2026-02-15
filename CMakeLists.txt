@@ -5,15 +5,25 @@ project(LightroomImportClone LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui)
 find_package(Threads REQUIRED)
 
-# Try to find LibRaw
-find_package(PkgConfig)
-pkg_check_modules(LibRaw libraw)
+# Try to find LibRaw: prefer a CMake config package (e.g. from vcpkg), then PkgConfig, then FetchContent.
+find_package(LibRaw CONFIG QUIET)
 
 if (NOT LibRaw_FOUND)
-    message(STATUS "LibRaw not found via PkgConfig, trying to fetch it...")
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(LibRaw libraw)
+    endif()
+endif()
+
+if (NOT LibRaw_FOUND)
+    message(STATUS "LibRaw not found via CMake config or PkgConfig, trying to fetch it...")
     include(FetchContent)
     FetchContent_Declare(
         LibRaw
@@ -22,8 +32,18 @@ if (NOT LibRaw_FOUND)
     )
     # LibRaw build options to minimize deps if fetched
     set(LIBRAW_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE) # Build static libraw
     FetchContent_MakeAvailable(LibRaw)
-    set(LibRaw_LIBRARIES libraw)
+    
+    # Check if libraw target exists (it might be named differently depending on how it's built)
+    if(TARGET libraw)
+        set(LibRaw_LIBRARIES libraw)
+    elseif(TARGET raw)
+        set(LibRaw_LIBRARIES raw)
+    else()
+        message(WARNING "LibRaw target not found after fetch!")
+    endif()
+    
     set(LibRaw_INCLUDE_DIRS ${libraw_SOURCE_DIR})
 endif()
 
@@ -60,12 +80,31 @@ target_link_libraries(LightroomImportClone PRIVATE
 )
 
 if (LibRaw_FOUND)
-    target_include_directories(LightroomImportClone PRIVATE ${LibRaw_INCLUDE_DIRS})
-    target_link_libraries(LightroomImportClone PRIVATE ${LibRaw_LIBRARIES})
+    if (TARGET libraw::raw_r)
+        target_link_libraries(LightroomImportClone PRIVATE libraw::raw_r)
+    elseif (TARGET libraw::raw)
+        target_link_libraries(LightroomImportClone PRIVATE libraw::raw)
+    elseif (TARGET LibRaw::LibRaw)
+        target_link_libraries(LightroomImportClone PRIVATE LibRaw::LibRaw)
+    else()
+        target_include_directories(LightroomImportClone PRIVATE ${LibRaw_INCLUDE_DIRS})
+        target_link_directories(LightroomImportClone PRIVATE ${LibRaw_LIBRARY_DIRS})
+        target_link_libraries(LightroomImportClone PRIVATE ${LibRaw_LIBRARIES})
+    endif()
 else()
     # Fallback if fetched
     target_include_directories(LightroomImportClone PRIVATE ${libraw_SOURCE_DIR})
-    target_link_libraries(LightroomImportClone PRIVATE libraw)
+    if(TARGET libraw)
+        target_link_libraries(LightroomImportClone PRIVATE libraw)
+    elseif(TARGET raw)
+        target_link_libraries(LightroomImportClone PRIVATE raw)
+    else()
+        if (WIN32)
+            message(FATAL_ERROR "LibRaw not found. On Windows, install it with vcpkg (vcpkg install libraw) and configure CMake with the vcpkg toolchain file.")
+        else()
+            message(FATAL_ERROR "LibRaw not found. Please install the LibRaw development package (e.g. libraw-dev on Linux, brew install libraw on macOS).")
+        endif()
+    endif()
 endif()
 
 if(APPLE)

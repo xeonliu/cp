@@ -37,7 +37,7 @@ signals:
 
 private slots:
     void toggle_content();
-    void on_header_checkbox_changed(int state);
+    void on_header_checkbox_changed(Qt::CheckState state);
     void on_item_check_changed(QListWidgetItem *item);
     void on_item_clicked(QListWidgetItem *item);
 

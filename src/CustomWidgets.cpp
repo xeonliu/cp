@@ -66,7 +66,7 @@ DateSection::DateSection(const QString& date_str, QWidget *parent)
     checkbox = new QCheckBox(date_str, header);
     checkbox->setStyleSheet("font-weight: bold; color: #ddd;");
     checkbox->setChecked(true);
-    connect(checkbox, &QCheckBox::stateChanged, this, &DateSection::on_header_checkbox_changed);
+    connect(checkbox, &QCheckBox::checkStateChanged, this, &DateSection::on_header_checkbox_changed);
     header_layout->addWidget(checkbox);
     
     count_label = new QLabel("(0)", header);
@@ -99,7 +99,7 @@ void DateSection::update_count() {
     count_label->setText(QString("(%1)").arg(list_widget->count()));
 }
 
-void DateSection::on_header_checkbox_changed(int state) {
+void DateSection::on_header_checkbox_changed(Qt::CheckState state) {
     bool is_checked = (state == Qt::Checked);
     list_widget->blockSignals(true);
     for (int i = 0; i < list_widget->count(); ++i) {

@@ -11,6 +11,7 @@
 #include <QStyle>
 #include <QRadioButton>
 #include <QStandardPaths>
+#include <QScrollBar>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), 
     target_directory(QDir::homePath()),
@@ -268,12 +269,12 @@ QWidget* MainWindow::create_right_panel() {
     
     organize_checkbox = new QCheckBox("按日期组织文件", options_group);
     organize_checkbox->setChecked(true);
-    connect(organize_checkbox, &QCheckBox::stateChanged, this, &MainWindow::update_grid_filter);
+    connect(organize_checkbox, &QCheckBox::checkStateChanged, this, &MainWindow::update_grid_filter);
     options_layout->addWidget(organize_checkbox);
     
     thumbnail_checkbox = new QCheckBox("生成缩略图（可能较慢）", options_group);
     thumbnail_checkbox->setChecked(false);
-    connect(thumbnail_checkbox, &QCheckBox::stateChanged, this, &MainWindow::on_thumbnail_toggle_changed);
+    connect(thumbnail_checkbox, &QCheckBox::checkStateChanged, this, &MainWindow::on_thumbnail_toggle_changed);
     options_layout->addWidget(thumbnail_checkbox);
     
     QHBoxLayout *date_format_layout = new QHBoxLayout();
@@ -716,7 +717,7 @@ void MainWindow::add_import_preview(QTreeWidgetItem *root, const QMap<QString, Q
                 }
             }
             
-            bool exists = QDir(target_directory).cd(path_str.section('/', 0, i)).exists(part);
+            bool exists = QDir(target_directory).cd(path_str.section('/', 0, i)) && QDir(target_directory + "/" + path_str.section('/', 0, i)).exists(part);
             
             if (!found) {
                 found = new QTreeWidgetItem(parent);
@@ -734,7 +735,7 @@ void MainWindow::add_import_preview(QTreeWidgetItem *root, const QMap<QString, Q
         }
         
         // Add files preview to the last node
-        for (int k = 0; k < std::min(3, files.size()); ++k) {
+        for (int k = 0; k < std::min<qsizetype>(3, files.size()); ++k) {
             QTreeWidgetItem *file_item = new QTreeWidgetItem(parent);
             file_item->setText(0, "📄 " + files[k]);
             file_item->setForeground(0, QColor("#88CCFF"));
