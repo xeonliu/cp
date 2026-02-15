@@ -20,6 +20,7 @@ void OnBrowseTargetClick();
 void OnPreviewClick();
 void UpdatePreviewTree();
 void PopulateTreeChildren(HTREEITEM hParent);
+void FreeTreeItemRecursive(HTREEITEM hItem);
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     // Initialize common controls
@@ -255,6 +256,26 @@ void CreateUI(HWND hwnd) {
     SendMessage(g_app.hwndStatusText, WM_SETFONT, (WPARAM)hFont, TRUE);
 }
 
+void FreeTreeItemRecursive(HTREEITEM hItem) {
+    if (!hItem) return;
+    
+    // Free all children first (recursive)
+    HTREEITEM hChild = TreeView_GetChild(g_app.hwndSourceTree, hItem);
+    while (hChild) {
+        HTREEITEM hNextChild = TreeView_GetNextSibling(g_app.hwndSourceTree, hChild);
+        FreeTreeItemRecursive(hChild);
+        hChild = hNextChild;
+    }
+    
+    // Free this item's data
+    TVITEMW tvi;
+    tvi.mask = TVIF_PARAM;
+    tvi.hItem = hItem;
+    if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
+        free((TreeItemData*)tvi.lParam);
+    }
+}
+
 void PopulateTreeChildren(HTREEITEM hParent) {
     // Get parent item data
     TVITEMW tvi;
@@ -299,13 +320,33 @@ void PopulateTreeChildren(HTREEITEM hParent) {
             wchar_t fullPath[MAX_PATH_LEN];
             swprintf_s(fullPath, MAX_PATH_LEN, L"%s%s\\", parentData->fullPath, findData.cFileName);
             
+            // Check if this directory has subdirectories
+            wchar_t checkPath[MAX_PATH_LEN];
+            swprintf_s(checkPath, MAX_PATH_LEN, L"%s*", fullPath);
+            WIN32_FIND_DATAW checkData;
+            HANDLE hCheck = FindFirstFileW(checkPath, &checkData);
+            int hasChildren = 0;
+            
+            if (hCheck != INVALID_HANDLE_VALUE) {
+                do {
+                    if (wcscmp(checkData.cFileName, L".") != 0 && 
+                        wcscmp(checkData.cFileName, L"..") != 0 &&
+                        (checkData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                        !(checkData.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) {
+                        hasChildren = 1;
+                        break;
+                    }
+                } while (FindNextFileW(hCheck, &checkData));
+                FindClose(hCheck);
+            }
+            
             // Add to tree
             TVINSERTSTRUCT tvis = {0};
             tvis.hParent = hParent;
             tvis.hInsertAfter = TVI_LAST;
             tvis.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
             tvis.item.pszText = findData.cFileName;
-            tvis.item.cChildren = 1; // Assume it might have children
+            tvis.item.cChildren = hasChildren; // Only show expand button if has children
             
             // Allocate and store full path
             TreeItemData* itemData = (TreeItemData*)malloc(sizeof(TreeItemData));
@@ -574,30 +615,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 CloseHandle(g_app.hImportThread);
             }
             
-            // Free tree item data
+            // Free all tree item data recursively
             HTREEITEM hItem = TreeView_GetRoot(g_app.hwndSourceTree);
             while (hItem) {
                 HTREEITEM hNext = TreeView_GetNextSibling(g_app.hwndSourceTree, hItem);
-                
-                // Free this item and its children recursively
-                TVITEMW tvi;
-                tvi.mask = TVIF_PARAM;
-                tvi.hItem = hItem;
-                if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
-                    free((TreeItemData*)tvi.lParam);
-                }
-                
-                // Free children
-                HTREEITEM hChild = TreeView_GetChild(g_app.hwndSourceTree, hItem);
-                while (hChild) {
-                    HTREEITEM hNextChild = TreeView_GetNextSibling(g_app.hwndSourceTree, hChild);
-                    tvi.hItem = hChild;
-                    if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
-                        free((TreeItemData*)tvi.lParam);
-                    }
-                    hChild = hNextChild;
-                }
-                
+                FreeTreeItemRecursive(hItem);
                 hItem = hNext;
             }
             
