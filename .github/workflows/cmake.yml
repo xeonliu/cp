@@ -58,7 +58,24 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
 
-    - name: Upload Artifact
+    - name: Deploy Qt (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $exePath = "${{ github.workspace }}\build\Release\LightroomImportClone.exe"
+        & windeployqt --release $exePath
+
+    - name: Copy LibRaw DLLs (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $vcpkgBin = "${{ github.workspace }}\vcpkg\installed\x64-windows\bin"
+        if (Test-Path $vcpkgBin) {
+          Copy-Item "$vcpkgBin\*.dll" "${{ github.workspace }}\build\Release" -Force
+        }
+
+    - name: Upload Artifact (non-Windows)
+      if: runner.os != 'Windows'
       uses: actions/upload-artifact@v4
       with:
         name: LightroomImportClone-${{ matrix.os }}
@@ -66,3 +83,11 @@ jobs:
           ${{github.workspace}}/build/LightroomImportClone*
           ${{github.workspace}}/build/Release/LightroomImportClone*
           ${{github.workspace}}/build/*.app
+
+    - name: Upload Artifact (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: LightroomImportClone-${{ matrix.os }}
+        path: |
+          ${{github.workspace}}/build/Release/**
