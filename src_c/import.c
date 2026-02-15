@@ -42,7 +42,7 @@ void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTe
     SYSTEMTIME st;
     FileTimeToSystemTime(ft, &st);
     
-    wchar_t result[512] = L"";
+    wchar_t result[MAX_PATH_LEN] = L"";
     size_t resultLen = 0;
     size_t templateLen = wcslen(customTemplate);
     
@@ -88,12 +88,19 @@ void GetDateSubdirectoryFromTemplate(const FILETIME* ft, const wchar_t* customTe
                     if (validKey) {
                         wchar_t valueStr[16];
                         // Format the value
-                        if (wcslen(format) > 0 && wcscmp(format, L"02d") == 0) {
-                            swprintf_s(valueStr, 16, L"%02d", value);
-                        } else if (wcslen(format) > 0 && wcscmp(format, L"04d") == 0) {
-                            swprintf_s(valueStr, 16, L"%04d", value);
+                        if (wcslen(format) > 0) {
+                            // Use explicit format specifier
+                            if (wcscmp(format, L"02d") == 0) {
+                                swprintf_s(valueStr, 16, L"%02d", value);
+                            } else if (wcscmp(format, L"04d") == 0) {
+                                swprintf_s(valueStr, 16, L"%04d", value);
+                            } else {
+                                // Unknown format, use default
+                                swprintf_s(valueStr, 16, L"%d", value);
+                            }
                         } else {
-                            // Default formatting: pad month, day, hour, minute, second
+                            // Default formatting: pad only time components (hour, minute, second)
+                            // Month and day are padded by convention
                             if (_wcsicmp(key, L"month") == 0 || _wcsicmp(key, L"day") == 0 ||
                                 _wcsicmp(key, L"hour") == 0 || _wcsicmp(key, L"minute") == 0 || 
                                 _wcsicmp(key, L"second") == 0) {
