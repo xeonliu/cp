@@ -89,6 +89,11 @@ typedef struct {
     bool isMoving;
     int dateFormatIndex;
     
+    // Import progress tracking
+    wchar_t currentFile[MAX_PATH_LEN];
+    ULONGLONG totalBytesProcessed;
+    DWORD importStartTime;
+    
     CRITICAL_SECTION csFiles;
     HANDLE hScanThread;
     HANDLE hImportThread;

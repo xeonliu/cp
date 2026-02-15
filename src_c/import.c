@@ -219,12 +219,20 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
     int processedFiles = 0;
     int skippedDuplicates = 0;
     
+    // Initialize progress tracking
+    g_app.totalBytesProcessed = 0;
+    g_app.importStartTime = GetTickCount();
+    g_app.currentFile[0] = L'\0';
+    
     // Update progress bar range
     SendMessage(g_app.hwndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, totalFiles));
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);
     
     for (int i = 0; i < totalFiles && !g_app.stopRequested; i++) {
         FileInfo* file = &g_app.files[i];
+        
+        // Update current file being processed
+        wcscpy_s(g_app.currentFile, MAX_PATH_LEN, file->path);
         
         // Compute hash if not already computed for deduplication
         if (!file->hashComputed) {
@@ -254,27 +262,47 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
                 wchar_t errorMsg[512];
                 swprintf_s(errorMsg, 512, L"Failed to import: %s", file->path);
                 SetWindowTextW(g_app.hwndStatusText, errorMsg);
+            } else if (result == IMPORT_SUCCESS) {
+                // Track bytes processed for speed calculation
+                g_app.totalBytesProcessed += file->fileSize;
             }
-            // IMPORT_SUCCESS - file was imported successfully, no action needed
         }
         
         processedFiles++;
         SendMessage(g_app.hwndProgressBar, PBM_SETPOS, processedFiles, 0);
         
-        // Update status every 10 files (synchronous to avoid lifetime issues)
-        if (processedFiles % 10 == 0 || processedFiles == totalFiles) {
-            wchar_t statusText[256];
-            swprintf_s(statusText, 256, L"Importing: %d/%d (Skipped %d duplicates)", 
-                      processedFiles, totalFiles, skippedDuplicates);
+        // Update status with speed information
+        DWORD elapsedMs = GetTickCount() - g_app.importStartTime;
+        if (elapsedMs > 0) {
+            // Calculate speed in MB/s
+            double elapsedSec = elapsedMs / 1000.0;
+            double speedMBps = (g_app.totalBytesProcessed / (1024.0 * 1024.0)) / elapsedSec;
+            
+            // Get just the filename for display
+            const wchar_t* currentFileName = wcsrchr(g_app.currentFile, L'\\');
+            if (currentFileName) currentFileName++;
+            else currentFileName = g_app.currentFile;
+            
+            wchar_t statusText[512];
+            swprintf_s(statusText, 512, L"Importing: %d/%d (%.1f MB/s, %d duplicates) - %s", 
+                      processedFiles, totalFiles, speedMBps, skippedDuplicates, currentFileName);
             SetWindowTextW(g_app.hwndStatusText, statusText);
         }
     }
     
     // Final status (synchronous)
+    DWORD totalElapsedMs = GetTickCount() - g_app.importStartTime;
+    double totalElapsedSec = totalElapsedMs / 1000.0;
+    double avgSpeedMBps = totalElapsedSec > 0 ? 
+        (g_app.totalBytesProcessed / (1024.0 * 1024.0)) / totalElapsedSec : 0.0;
+    
     wchar_t finalStatus[256];
-    swprintf_s(finalStatus, 256, L"Import complete: %d files, %d duplicates skipped", 
-              processedFiles, skippedDuplicates);
+    swprintf_s(finalStatus, 256, L"Import complete: %d files (%.1f MB/s avg), %d duplicates skipped", 
+              processedFiles, avgSpeedMBps, skippedDuplicates);
     SetWindowTextW(g_app.hwndStatusText, finalStatus);
+    
+    // Clear current file
+    g_app.currentFile[0] = L'\0';
     
     // Reset progress bar
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);
