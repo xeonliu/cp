@@ -33,6 +33,7 @@ bool IsSupportedFile(const wchar_t* filename) {
 
 // Extract EXIF date using Windows Imaging Component (Win7+)
 // Returns true if EXIF date was successfully extracted, false otherwise
+// Note: COM must be initialized before calling this function
 bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime) {
     HRESULT hr = S_OK;
     IWICImagingFactory* pFactory = NULL;
@@ -41,17 +42,11 @@ bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime) {
     IWICMetadataQueryReader* pMetadataReader = NULL;
     bool success = false;
     
-    // Initialize COM
-    hr = CoInitialize(NULL);
-    if (FAILED(hr)) {
-        return false;
-    }
-    
     // Create WIC factory
     hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IWICImagingFactory, (LPVOID*)&pFactory);
     if (FAILED(hr)) {
-        goto cleanup;
+        return false;
     }
     
     // Create decoder from filename
@@ -109,7 +104,6 @@ cleanup:
     if (pFrame) pFrame->lpVtbl->Release(pFrame);
     if (pDecoder) pDecoder->lpVtbl->Release(pDecoder);
     if (pFactory) pFactory->lpVtbl->Release(pFactory);
-    CoUninitialize();
     
     return success;
 }

@@ -43,6 +43,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     InitializeCriticalSection(&g_app.csFiles);
     GetCurrentDirectoryW(MAX_PATH_LEN, g_app.targetPath);
     
+    // Initialize COM for WIC (Windows Imaging Component)
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    
     // Register window class
     const wchar_t CLASS_NAME[] = L"LightroomImportClone";
     
@@ -85,6 +88,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
     
     // Cleanup
+    CoUninitialize();
     DeleteCriticalSection(&g_app.csFiles);
     free(g_app.files);
     
@@ -146,7 +150,7 @@ void CreateUI(HWND hwnd) {
                  310, y, 120, 25, hwnd, NULL, NULL, NULL);
     
     g_app.hwndFileList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"",
-                                         WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL,
+                                         WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT,
                                          310, y + 30, 180, 360, hwnd, (HMENU)ID_FILE_LIST, NULL, NULL);
     SendMessage(g_app.hwndFileList, WM_SETFONT, (WPARAM)hFont, TRUE);
     
@@ -662,16 +666,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     OnPreviewClick();
                     break;
                 case ID_SELECT_ALL_BUTTON:
+                    EnterCriticalSection(&g_app.csFiles);
                     for (int i = 0; i < g_app.fileCount; i++) {
                         g_app.files[i].isSelected = true;
                         ListView_SetCheckState(g_app.hwndFileList, i, TRUE);
                     }
+                    LeaveCriticalSection(&g_app.csFiles);
                     break;
                 case ID_DESELECT_ALL_BUTTON:
+                    EnterCriticalSection(&g_app.csFiles);
                     for (int i = 0; i < g_app.fileCount; i++) {
                         g_app.files[i].isSelected = false;
                         ListView_SetCheckState(g_app.hwndFileList, i, FALSE);
                     }
+                    LeaveCriticalSection(&g_app.csFiles);
                     break;
                 case ID_ORGANIZE_CHECK:
                     // Auto-update preview when organize checkbox changes
