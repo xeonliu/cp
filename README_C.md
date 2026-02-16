@@ -20,12 +20,17 @@ Unlike the Qt/C++ version, this implementation is Windows-only but offers better
 
 ### Core Features
 - ✅ **File Scanning**: Recursive and non-recursive directory scanning
-- ✅ **Deduplication**: MD5 hash-based duplicate detection
-- ✅ **Custom Folder Structure**: Organize files by date with customizable formats
+- ✅ **Deduplication**: MD5 hash-based duplicate detection (two-phase strategy)
+- ✅ **Custom Folder Structure**: Organize files by date with customizable templates
 - ✅ **Import Operations**: Copy or Move files
 - ✅ **Multi-threading**: Separate threads for scanning and importing
-- ✅ **Progress Tracking**: Real-time progress updates
+- ✅ **Progress Tracking**: Real-time progress with speed (MB/s) and current file display
 - ✅ **Preview Structure**: Preview folder organization before importing
+- ✅ **Selective Import**: Checkbox-based file selection (default all selected)
+- ✅ **EXIF Date Support**: Extract capture date from EXIF metadata (Win7+)
+- ✅ **Dotfile Filtering**: Automatically ignores files starting with `.`
+- ✅ **Deep Directory Support**: Iterative traversal prevents stack overflow
+- ✅ **Expandable Folder Tree**: Browse and select any folder in the file system
 
 ### Supported File Types
 - **Images**: JPG, JPEG, PNG, BMP, GIF, TIFF
@@ -120,8 +125,11 @@ cd src_c
 cl /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN ^
    main.c scanner.c import.c hash.c ^
    /link /SUBSYSTEM:WINDOWS comctl32.lib shlwapi.lib shell32.lib ole32.lib ^
+   windowscodecs.lib propsys.lib ^
    /OUT:LightroomImportClone_C.exe
 ```
+
+**Note**: `windowscodecs.lib` and `propsys.lib` are required for EXIF date extraction (Win7+).
 
 ### Windows XP Compatible Build
 
@@ -150,21 +158,48 @@ The XP-compatible executable will be in `src_c\build\Release\LightroomImportClon
 
 ## Usage
 
-1. **Select Source Folder**: Click on a drive or folder in the tree view
+1. **Select Source Folder**: 
+   - Click on a drive in the tree view
+   - Expand drives and folders by clicking the [+] button
+   - Navigate to any folder at any depth
+   - Select the folder you want to scan
+
 2. **Configure Scan Options**: 
    - Check "Recursive Scan" to scan subdirectories
-3. **Click "Scan"**: The application will find all supported files
-4. **Preview Structure** (NEW):
+   - Check "Use EXIF Date (Win7+)" to extract photo capture dates from EXIF metadata
+
+3. **Click "Scan"**: 
+   - The application will find all supported files
+   - Files starting with `.` (dotfiles) are automatically ignored
+   - Scanned files appear in the "Found Files" list with checkboxes
+
+4. **Select Files to Import**:
+   - All files are checked by default
+   - Uncheck files you don't want to import
+   - Use "All" button to select all files
+   - Use "None" button to deselect all files
+
+5. **Preview Structure**:
    - The preview tree automatically shows how files will be organized
    - Click "Preview Structure" button to manually refresh the preview
    - See file counts for each folder before importing
-5. **Configure Target**:
+   - Preview updates when date format or organization settings change
+
+6. **Configure Target**:
    - Enter or browse to select target folder
    - Choose "Copy" or "Move" mode
    - Optionally enable "Organize by Date"
    - Select date format (including nested formats like `YYYY/YYYY-MM-DD`)
    - Or choose "Custom" and enter your own template (e.g., `{year}/{month}/{day}`)
-6. **Click "Import Files"**: Files will be imported with deduplication
+
+7. **Click "Import Files"**: 
+   - Only checked files will be imported
+   - Real-time display shows:
+     - Progress (e.g., "45/100")
+     - Copy speed in MB/s (e.g., "12.5 MB/s")
+     - Duplicate count (e.g., "3 duplicates")
+     - Current file being processed (e.g., "IMG_1234.JPG")
+   - Files will be imported with automatic deduplication
 
 ## Architecture
 
@@ -183,21 +218,26 @@ src_c/
 **FileInfo**: Stores information about each scanned file
 ```c
 typedef struct {
-    wchar_t path[MAX_PATH_LEN];
-    FILETIME fileTime;
-    ULONGLONG fileSize;
-    unsigned char hash[HASH_SIZE];
-    bool hashComputed;
+    wchar_t path[MAX_PATH_LEN];      // Full file path
+    FILETIME fileTime;                // File or EXIF date/time
+    ULONGLONG fileSize;               // File size in bytes
+    unsigned char hash[HASH_SIZE];    // MD5 hash (16 bytes)
+    bool hashComputed;                // Whether hash has been computed
+    bool isSelected;                  // Whether file is selected for import (checkbox state)
 } FileInfo;
 ```
 
 **AppState**: Global application state
 ```c
 typedef struct {
-    HWND hwndMain;
-    FileInfo* files;
-    int fileCount;
-    CRITICAL_SECTION csFiles;
+    HWND hwndMain;                    // Main window handle
+    FileInfo* files;                  // Dynamic array of scanned files
+    int fileCount;                    // Number of scanned files
+    CRITICAL_SECTION csFiles;         // Thread synchronization for file list
+    bool useExifDate;                 // Whether to extract EXIF dates (Win7+)
+    wchar_t currentFile[MAX_PATH_LEN]; // Current file being processed
+    ULONGLONG totalBytesProcessed;    // Total bytes processed (for speed calculation)
+    DWORD importStartTime;            // Import start time (GetTickCount)
     // ... other UI and state members
 } AppState;
 ```
@@ -211,6 +251,7 @@ During import, files within the current scan batch are compared:
 1. **Hash Computation**: Each file is hashed using MD5
 2. **In-Memory Comparison**: Compare with previously processed files in the same batch (indices 0 to i-1)
 3. **Skip Duplicates**: Files with matching hashes are skipped immediately
+4. **Selection Filter**: Only processes files that are selected (checkbox checked)
 
 ### Phase 2: Target Directory Deduplication
 Before importing each file:
@@ -229,6 +270,73 @@ The status bar shows:
 - **Final summary**: Average speed and total duplicates
 
 **Example**: `Importing: 45/100 (12.5 MB/s, 3 duplicates) - IMG_1234.JPG`
+
+## EXIF Date Extraction (Windows 7+)
+
+When the "Use EXIF Date (Win7+)" option is enabled, the application extracts photo capture dates from EXIF metadata using Windows Imaging Component (WIC).
+
+### Supported Image Formats
+- **JPEG/JPG**: Full EXIF support
+- **PNG**: Limited metadata support
+- **TIFF**: Full EXIF support
+- **RAW Formats**: ARW (Sony), CR2 (Canon), NEF (Nikon), DNG (Adobe), ORF (Olympus), RW2 (Panasonic)
+
+### EXIF Tag Priority
+The application tries the following EXIF tags in order:
+1. **DateTimeOriginal** (0x9003) - When the photo was taken (preferred)
+2. **DateTimeDigitized** (0x9004) - When the photo was digitized
+3. **DateTime** (0x0132) - Last modification date in camera
+
+### Fallback Behavior
+- **EXIF available**: Uses EXIF date for organization
+- **No EXIF**: Falls back to file modification time
+- **Video files**: Always use file modification time (no EXIF support)
+- **Error reading**: Falls back to file modification time
+
+### Implementation
+```c
+bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime) {
+    // 1. Initialize WIC factory (COM must be initialized)
+    // 2. Create decoder for image file
+    // 3. Get metadata query reader
+    // 4. Try DateTimeOriginal, DateTimeDigitized, DateTime
+    // 5. Parse "YYYY:MM:DD HH:MM:SS" format
+    // 6. Convert SYSTEMTIME to FILETIME
+    // 7. Return true if successful
+}
+```
+
+### Benefits
+- **Accurate Organization**: Photos organized by capture date, not file copy date
+- **Preserves History**: Original dates maintained even after editing/copying
+- **Automatic Fallback**: All files can be organized (EXIF or modification time)
+- **No External Dependencies**: Uses built-in Windows components
+
+### Requirements
+- **Windows 7 or later**: WIC is built into Windows 7+
+- **Linked Libraries**: `windowscodecs.lib`, `propsys.lib`
+- **COM Initialization**: Application initializes COM at startup with `CoInitializeEx`
+
+## File Selection
+
+### Checkbox-Based Selection
+The "Found Files" list displays all scanned files with checkboxes:
+- **Default State**: All files are selected (checked)
+- **User Control**: Uncheck files you don't want to import
+- **Visual Feedback**: Checked = will import, Unchecked = will skip
+
+### Quick Selection Buttons
+- **All Button**: Selects all files in the list
+- **None Button**: Deselects all files in the list
+- **Thread-Safe**: Uses critical sections for safe concurrent access
+
+### Dotfile Filtering
+Files starting with `.` (dot) are automatically ignored during scan:
+- **Unix dotfiles**: `.gitignore`, `.htaccess`, `.bashrc`
+- **macOS files**: `.DS_Store`, `.AppleDouble`
+- **Hidden files**: Any file starting with period
+
+This prevents importing configuration files and hidden system files.
 
 ## Copy/Move Algorithm
 
@@ -370,24 +478,43 @@ BOOL MoveFileW(
 | Executable Size | ~10-20 MB | ~100 KB |
 | Memory Usage | Higher (Qt overhead) | Lower (native) |
 | Performance | Good | Excellent on Windows |
-| Speed Display | No | Yes (real-time MB/s) |
-| Current File Display | No | Yes (during import) |
-| Folder Navigation | Tree view | Expandable tree with lazy loading |
-| Custom Templates | Limited | Full support with placeholders |
+| **Progress Tracking** | Basic | **Real-time speed (MB/s) + current file** |
+| **File Selection** | All imported | **Checkbox-based selective import** |
+| Folder Navigation | Tree view | **Expandable tree with lazy loading** |
+| Custom Templates | Limited | **Full support with placeholders** |
+| **EXIF Date Support** | No | **Yes (Win7+, WIC-based)** |
+| **Dotfile Filtering** | No | **Yes (automatic)** |
+| **Deep Directory Support** | Limited (stack overflow risk) | **Unlimited (iterative algorithm)** |
 | Image Preview | Yes (thumbnails) | No (excluded per requirements) |
-| Folder Preview | No | Yes (tree structure preview) |
+| Folder Preview | No | **Yes (tree structure preview)** |
 | UI Framework | Qt Widgets | Native WinAPI |
+| Windows XP Support | No | **Yes (separate build)** |
+
+## Key Advantages of WinAPI C Version
+
+1. **Tiny Footprint**: 100 KB vs 10-20 MB (200x smaller)
+2. **Real-Time Feedback**: Live speed display and current file tracking
+3. **Selective Import**: Choose exactly which files to import with checkboxes
+4. **EXIF Organization**: Organize by actual photo capture date, not file date
+5. **Deep Directory Scanning**: No stack overflow on complex directory structures
+6. **Expandable Navigation**: Browse entire file system, select any folder
+7. **Smart Filtering**: Automatically skips dotfiles and hidden files
+8. **Legacy Support**: Works on Windows XP through Windows 11
+9. **Zero Dependencies**: No external libraries, uses only Windows SDK
+10. **Superior Windows Performance**: Native APIs, memory-mapped I/O, optimized threading
 
 ## Key Limitations Summary
 
 - **Windows Only**: This implementation uses Windows-specific APIs
 - **Path Length**: 260 characters max (Windows MAX_PATH limitation)
-- **Folder Depth**: ~32 levels (NTFS limitation)
+- **Folder Depth (Creating)**: ~32 levels (NTFS limitation for directory creation)
+- **Folder Depth (Scanning)**: Unlimited (iterative algorithm prevents stack overflow)
 - **File Count**: ~1 million files per scan (memory dependent)
 - **Sequential Import**: Files processed one at a time (not parallel)
 - **No RAW Preview**: RAW files treated as regular files (no thumbnail generation)
 - **Basic UI**: Functional but less polished than Qt version
 - **No Image Preview**: As requested, preview functionality is not included
+- **EXIF Support**: Requires Windows 7+ for EXIF date extraction (optional feature)
 
 See the "Limitations" section above for detailed information on file system constraints, performance characteristics, and workarounds.
 
@@ -401,11 +528,18 @@ MIT License - Same as the main project
 The original request excluded preview functionality. RAW file decoding (LibRaw) would add significant complexity and dependencies, counter to the goal of a lightweight, pure WinAPI implementation.
 
 ### Future Enhancements
-Possible improvements while maintaining pure C/WinAPI approach:
-- EXIF reading using Windows Imaging Component (WIC)
-- Thumbnail generation using WIC
-- Async I/O using overlapped I/O
-- Thread pool API for better scaling
+Completed enhancements (from original future list):
+- ✅ EXIF reading using Windows Imaging Component (WIC) - **Implemented**
+- ✅ Expandable folder tree with lazy loading - **Implemented**
+- ✅ Checkbox-based file selection - **Implemented**
+- ✅ Real-time progress with speed tracking - **Implemented**
+- ✅ Deep directory scanning without stack overflow - **Implemented**
+
+Additional possible improvements while maintaining pure C/WinAPI approach:
+- Thumbnail generation using WIC for image preview
+- Async I/O using overlapped I/O for faster scanning
+- Thread pool API for parallel hash computation
+- Long path support (>260 characters) using \\?\ prefix
 
 ## Building in CI/CD
 
