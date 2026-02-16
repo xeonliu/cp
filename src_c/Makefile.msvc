@@ -1,0 +1,38 @@
+# Makefile.msvc - MSVC/NMAKE build file for Windows
+# Usage: nmake /f Makefile.msvc
+
+# Compiler settings
+CC = cl
+CFLAGS = /W3 /O2 /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /std:c11
+LDFLAGS = /link /SUBSYSTEM:WINDOWS
+LIBS = comctl32.lib shlwapi.lib shell32.lib ole32.lib user32.lib gdi32.lib
+
+# Source files
+SOURCES = main.c scanner.c import.c hash.c
+OBJECTS = main.obj scanner.obj import.obj hash.obj
+
+# Output
+TARGET = LightroomImportClone_C.exe
+
+# Default target
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(OBJECTS) $(LDFLAGS) $(LIBS) /OUT:$(TARGET)
+
+main.obj: main.c common.h scanner.h import.h
+	$(CC) $(CFLAGS) /c main.c
+
+scanner.obj: scanner.c scanner.h common.h hash.h
+	$(CC) $(CFLAGS) /c scanner.c
+
+import.obj: import.c import.h common.h hash.h
+	$(CC) $(CFLAGS) /c import.c
+
+hash.obj: hash.c hash.h common.h
+	$(CC) $(CFLAGS) /c hash.c
+
+clean:
+	del /Q *.obj $(TARGET)
+
+.PHONY: all clean
