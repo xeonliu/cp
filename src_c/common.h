@@ -92,7 +92,7 @@ typedef struct {
     bool isRecursive;
     bool organizeByDate;
     bool isMoving;
-    bool useExifDate;  // Use EXIF date for Win7+
+    bool useExifDate;  // Use EXIF date for Vista+
     int dateFormatIndex;
     bool suppressPreviewOnCheck;
     

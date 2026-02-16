@@ -31,7 +31,7 @@ bool IsSupportedFile(const wchar_t* filename) {
     return false;
 }
 
-// Extract EXIF date using Windows Imaging Component (Win7+)
+// Extract EXIF date using Windows Imaging Component (Vista+)
 // Returns true if EXIF date was successfully extracted, false otherwise
 // Note: COM must be initialized before calling this function
 bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime) {

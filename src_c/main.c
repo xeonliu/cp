@@ -225,6 +225,12 @@ void CreateUI(HWND hwnd) {
                                             730, y, 180, 25, hwnd, (HMENU)ID_ORGANIZE_CHECK, NULL, NULL);
     SendMessage(g_app.hwndOrganizeCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
     
+    g_app.hwndUseExifCheck = CreateWindowW(L"BUTTON", L"Use EXIF date (Vista+)",
+                                           WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                                           930, y, 200, 25, hwnd, (HMENU)ID_USE_EXIF_CHECK, NULL, NULL);
+    SendMessage(g_app.hwndUseExifCheck, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SendMessage(g_app.hwndUseExifCheck, BM_SETCHECK, g_app.useExifDate ? BST_CHECKED : BST_UNCHECKED, 0);
+    
     y += 30;
     
     CreateWindowW(L"STATIC", L"Date Format:", WS_VISIBLE | WS_CHILD,
@@ -696,9 +702,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     UpdatePreviewTree();
                     break;
                 case ID_ORGANIZE_CHECK:
-                    // Auto-update preview when organize checkbox changes
                     if (HIWORD(wParam) == BN_CLICKED) {
                         UpdatePreviewTree();
+                    }
+                    break;
+                case ID_USE_EXIF_CHECK:
+                    if (HIWORD(wParam) == BN_CLICKED) {
+                        g_app.useExifDate = (SendMessage(g_app.hwndUseExifCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
                     }
                     break;
                 case ID_DATE_FORMAT_COMBO:
