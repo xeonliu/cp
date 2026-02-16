@@ -215,7 +215,24 @@ ImportResult ImportFile(const wchar_t* sourcePath, const wchar_t* targetBase, bo
 DWORD WINAPI ImportThread(LPVOID lpParam) {
     g_app.stopRequested = false;
     
-    int totalFiles = g_app.fileCount;
+    // Count only selected files
+    int totalFiles = 0;
+    for (int i = 0; i < g_app.fileCount; i++) {
+        if (g_app.files[i].isSelected) {
+            totalFiles++;
+        }
+    }
+    
+    if (totalFiles == 0) {
+        SetWindowTextW(g_app.hwndStatusText, L"No files selected for import");
+        HANDLE hThread = g_app.hImportThread;
+        g_app.hImportThread = NULL;
+        if (hThread) {
+            CloseHandle(hThread);
+        }
+        return 0;
+    }
+    
     int processedFiles = 0;
     int skippedDuplicates = 0;
     
@@ -228,8 +245,13 @@ DWORD WINAPI ImportThread(LPVOID lpParam) {
     SendMessage(g_app.hwndProgressBar, PBM_SETRANGE, 0, MAKELPARAM(0, totalFiles));
     SendMessage(g_app.hwndProgressBar, PBM_SETPOS, 0, 0);
     
-    for (int i = 0; i < totalFiles && !g_app.stopRequested; i++) {
+    for (int i = 0; i < g_app.fileCount && !g_app.stopRequested; i++) {
         FileInfo* file = &g_app.files[i];
+        
+        // Skip unselected files
+        if (!file->isSelected) {
+            continue;
+        }
         
         // Update current file being processed
         wcscpy_s(g_app.currentFile, MAX_PATH_LEN, file->path);

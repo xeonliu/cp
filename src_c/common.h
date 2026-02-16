@@ -46,6 +46,9 @@
 #define ID_CUSTOM_TEMPLATE_EDIT 1014
 #define ID_PREVIEW_BUTTON 1015
 #define ID_PREVIEW_TREE 1016
+#define ID_SELECT_ALL_BUTTON 1017
+#define ID_DESELECT_ALL_BUTTON 1018
+#define ID_USE_EXIF_CHECK 1019
 
 // File information structure
 typedef struct {
@@ -54,6 +57,7 @@ typedef struct {
     ULONGLONG fileSize;
     unsigned char hash[HASH_SIZE];
     bool hashComputed;
+    bool isSelected;  // For checkbox selection in UI
 } FileInfo;
 
 // Tree item data structure for storing full path
@@ -77,6 +81,7 @@ typedef struct {
     HWND hwndDateFormatCombo;
     HWND hwndCustomTemplateEdit;
     HWND hwndPreviewTree;
+    HWND hwndUseExifCheck;
     
     FileInfo* files;
     int fileCount;
@@ -87,6 +92,7 @@ typedef struct {
     bool isRecursive;
     bool organizeByDate;
     bool isMoving;
+    bool useExifDate;  // Use EXIF date for Win7+
     int dateFormatIndex;
     
     // Import progress tracking

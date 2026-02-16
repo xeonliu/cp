@@ -1,5 +1,10 @@
 #include "scanner.h"
 #include "hash.h"
+#include <wincodec.h>
+#include <propvarutil.h>
+
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "propsys.lib")
 
 // Supported file extensions
 static const wchar_t* SUPPORTED_EXTENSIONS[] = {
@@ -10,15 +15,103 @@ static const wchar_t* SUPPORTED_EXTENSIONS[] = {
 };
 
 bool IsSupportedFile(const wchar_t* filename) {
+    // Skip files starting with '.' (hidden/dotfiles)
+    if (filename[0] == L'.') {
+        return false;
+    }
+    
     const wchar_t* ext = wcsrchr(filename, L'.');
     if (ext == NULL) return false;
 
-    for (int i = 0; SUPPORTED_EXTENSIONS[i] != NULL; i++) {
+    for (int i = 0; i < SUPPORTED_EXTENSIONS[i] != NULL; i++) {
         if (_wcsicmp(ext, SUPPORTED_EXTENSIONS[i]) == 0) {
             return true;
         }
     }
     return false;
+}
+
+// Extract EXIF date using Windows Imaging Component (Win7+)
+// Returns true if EXIF date was successfully extracted, false otherwise
+bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime) {
+    HRESULT hr = S_OK;
+    IWICImagingFactory* pFactory = NULL;
+    IWICBitmapDecoder* pDecoder = NULL;
+    IWICBitmapFrameDecode* pFrame = NULL;
+    IWICMetadataQueryReader* pMetadataReader = NULL;
+    bool success = false;
+    
+    // Initialize COM
+    hr = CoInitialize(NULL);
+    if (FAILED(hr)) {
+        return false;
+    }
+    
+    // Create WIC factory
+    hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IWICImagingFactory, (LPVOID*)&pFactory);
+    if (FAILED(hr)) {
+        goto cleanup;
+    }
+    
+    // Create decoder from filename
+    hr = pFactory->lpVtbl->CreateDecoderFromFilename(pFactory, filepath, NULL,
+                                                      GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                                      &pDecoder);
+    if (FAILED(hr)) {
+        goto cleanup;
+    }
+    
+    // Get first frame
+    hr = pDecoder->lpVtbl->GetFrame(pDecoder, 0, &pFrame);
+    if (FAILED(hr)) {
+        goto cleanup;
+    }
+    
+    // Get metadata query reader
+    hr = pFrame->lpVtbl->GetMetadataQueryReader(pFrame, &pMetadataReader);
+    if (FAILED(hr)) {
+        goto cleanup;
+    }
+    
+    // Try to read EXIF date/time original
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    
+    // Try different EXIF date tags in order of preference
+    const wchar_t* dateTags[] = {
+        L"/app1/ifd/exif/{ushort=36867}",  // DateTimeOriginal
+        L"/app1/ifd/exif/{ushort=36868}",  // DateTimeDigitized
+        L"/app1/ifd/{ushort=306}",         // DateTime
+        NULL
+    };
+    
+    for (int i = 0; dateTags[i] != NULL; i++) {
+        hr = pMetadataReader->lpVtbl->GetMetadataByName(pMetadataReader, dateTags[i], &value);
+        if (SUCCEEDED(hr) && value.vt == VT_LPWSTR) {
+            // Parse EXIF date format: "YYYY:MM:DD HH:MM:SS"
+            SYSTEMTIME st = {0};
+            if (swscanf_s(value.pwszVal, L"%04hu:%02hu:%02hu %02hu:%02hu:%02hu",
+                         &st.wYear, &st.wMonth, &st.wDay,
+                         &st.wHour, &st.wMinute, &st.wSecond) == 6) {
+                // Convert SYSTEMTIME to FILETIME
+                SystemTimeToFileTime(&st, outFileTime);
+                success = true;
+            }
+            PropVariantClear(&value);
+            if (success) break;
+        }
+        PropVariantClear(&value);
+    }
+    
+cleanup:
+    if (pMetadataReader) pMetadataReader->lpVtbl->Release(pMetadataReader);
+    if (pFrame) pFrame->lpVtbl->Release(pFrame);
+    if (pDecoder) pDecoder->lpVtbl->Release(pDecoder);
+    if (pFactory) pFactory->lpVtbl->Release(pFactory);
+    CoUninitialize();
+    
+    return success;
 }
 
 void AddFile(const wchar_t* filepath, const WIN32_FIND_DATAW* findData) {
@@ -39,9 +132,32 @@ void AddFile(const wchar_t* filepath, const WIN32_FIND_DATAW* findData) {
     FileInfo* file = &g_app.files[g_app.fileCount];
     wcsncpy_s(file->path, MAX_PATH_LEN, filepath, _TRUNCATE);
     file->fileTime = findData->ftLastWriteTime;
+    
+    // Try to extract EXIF date if enabled and it's an image file
+    if (g_app.useExifDate) {
+        const wchar_t* ext = wcsrchr(filepath, L'.');
+        if (ext != NULL) {
+            // Only try EXIF extraction for image files (not videos)
+            if (_wcsicmp(ext, L".jpg") == 0 || _wcsicmp(ext, L".jpeg") == 0 ||
+                _wcsicmp(ext, L".png") == 0 || _wcsicmp(ext, L".tiff") == 0 ||
+                _wcsicmp(ext, L".tif") == 0 || _wcsicmp(ext, L".arw") == 0 ||
+                _wcsicmp(ext, L".cr2") == 0 || _wcsicmp(ext, L".nef") == 0 ||
+                _wcsicmp(ext, L".dng") == 0 || _wcsicmp(ext, L".orf") == 0 ||
+                _wcsicmp(ext, L".rw2") == 0 || _wcsicmp(ext, L".raw") == 0) {
+                
+                FILETIME exifDate;
+                if (ExtractExifDate(filepath, &exifDate)) {
+                    // Use EXIF date instead of file modification time
+                    file->fileTime = exifDate;
+                }
+            }
+        }
+    }
+    
     file->fileSize = ((ULONGLONG)findData->nFileSizeHigh << 32) | findData->nFileSizeLow;
     file->hashComputed = false;
     memset(file->hash, 0, HASH_SIZE);
+    file->isSelected = true;  // Default: all files selected
     
     g_app.fileCount++;
     
@@ -149,7 +265,7 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
     ScanDirectory(path, g_app.isRecursive);
     
     // Update file list view
-    SendMessage(g_app.hwndFileList, LB_RESETCONTENT, 0, 0);
+    ListView_DeleteAllItems(g_app.hwndFileList);
     
     EnterCriticalSection(&g_app.csFiles);
     for (int i = 0; i < g_app.fileCount; i++) {
@@ -157,7 +273,16 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
         if (filename) filename++;
         else filename = g_app.files[i].path;
         
-        SendMessage(g_app.hwndFileList, LB_ADDSTRING, 0, (LPARAM)filename);
+        LVITEMW lvi = {0};
+        lvi.mask = LVIF_TEXT | LVIF_PARAM;
+        lvi.iItem = i;
+        lvi.iSubItem = 0;
+        lvi.pszText = (LPWSTR)filename;
+        lvi.lParam = i;  // Store file index
+        ListView_InsertItem(g_app.hwndFileList, &lvi);
+        
+        // Set checkbox state based on isSelected
+        ListView_SetCheckState(g_app.hwndFileList, i, g_app.files[i].isSelected);
     }
     LeaveCriticalSection(&g_app.csFiles);
     

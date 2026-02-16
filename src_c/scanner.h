@@ -12,6 +12,9 @@ void AddFile(const wchar_t* filepath, const WIN32_FIND_DATAW* findData);
 // Check if file extension is supported
 bool IsSupportedFile(const wchar_t* filename);
 
+// Extract EXIF date from image file using WIC (Win7+)
+bool ExtractExifDate(const wchar_t* filepath, FILETIME* outFileTime);
+
 // Scan directory (recursive or not)
 void ScanDirectory(const wchar_t* path, bool recursive);
 

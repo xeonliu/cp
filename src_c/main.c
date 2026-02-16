@@ -36,6 +36,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_app.isRecursive = true;
     g_app.organizeByDate = false;
     g_app.isMoving = false;
+    g_app.useExifDate = false;
     g_app.dateFormatIndex = 0;
     g_app.stopRequested = false;
     wcscpy_s(g_app.customTemplate, 256, L"{year}/{year}-{month:02d}-{day:02d}");
@@ -144,10 +145,32 @@ void CreateUI(HWND hwnd) {
     CreateWindowW(L"STATIC", L"Found Files:", WS_VISIBLE | WS_CHILD,
                  310, y, 120, 25, hwnd, NULL, NULL, NULL);
     
-    g_app.hwndFileList = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-                                         WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                                         310, y + 30, 180, 400, hwnd, (HMENU)ID_FILE_LIST, NULL, NULL);
+    g_app.hwndFileList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, L"",
+                                         WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL,
+                                         310, y + 30, 180, 360, hwnd, (HMENU)ID_FILE_LIST, NULL, NULL);
     SendMessage(g_app.hwndFileList, WM_SETFONT, (WPARAM)hFont, TRUE);
+    
+    // Enable checkboxes in ListView
+    ListView_SetExtendedListViewStyle(g_app.hwndFileList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+    
+    // Add column
+    LVCOLUMNW lvc = {0};
+    lvc.mask = LVCF_TEXT | LVCF_WIDTH;
+    lvc.pszText = L"File";
+    lvc.cx = 150;
+    ListView_InsertColumn(g_app.hwndFileList, 0, &lvc);
+    
+    // Select All / Deselect All buttons
+    y += 395;
+    HWND hSelectAllBtn = CreateWindowW(L"BUTTON", L"All",
+                                       WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                                       310, y, 85, 25, hwnd, (HMENU)ID_SELECT_ALL_BUTTON, NULL, NULL);
+    SendMessage(hSelectAllBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+    
+    HWND hDeselectAllBtn = CreateWindowW(L"BUTTON", L"None",
+                                         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                                         405, y, 85, 25, hwnd, (HMENU)ID_DESELECT_ALL_BUTTON, NULL, NULL);
+    SendMessage(hDeselectAllBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
     
     // Preview tree
     CreateWindowW(L"STATIC", L"Preview Structure:", WS_VISIBLE | WS_CHILD,
@@ -441,6 +464,7 @@ void OnImportClick() {
     // Update settings
     g_app.isMoving = (SendMessage(g_app.hwndMoveRadio, BM_GETCHECK, 0, 0) == BST_CHECKED);
     g_app.organizeByDate = (SendMessage(g_app.hwndOrganizeCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    g_app.useExifDate = (SendMessage(g_app.hwndUseExifCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
     g_app.dateFormatIndex = (int)SendMessage(g_app.hwndDateFormatCombo, CB_GETCURSEL, 0, 0);
     
     // Get custom template
@@ -607,6 +631,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     PopulateTreeChildren(pnmtv->itemNew.hItem);
                 }
             }
+            
+            // Handle ListView checkbox changes
+            if (pnmhdr->idFrom == ID_FILE_LIST && pnmhdr->code == LVN_ITEMCHANGED) {
+                LPNMLISTVIEW pnmlv = (LPNMLISTVIEW)lParam;
+                if ((pnmlv->uChanged & LVIF_STATE) && 
+                    ((pnmlv->uOldState & LVIS_STATEIMAGEMASK) != (pnmlv->uNewState & LVIS_STATEIMAGEMASK))) {
+                    // Checkbox state changed
+                    int fileIndex = (int)pnmlv->lParam;
+                    if (fileIndex >= 0 && fileIndex < g_app.fileCount) {
+                        g_app.files[fileIndex].isSelected = ListView_GetCheckState(g_app.hwndFileList, pnmlv->iItem) ? true : false;
+                    }
+                }
+            }
             break;
         }
         
@@ -623,6 +660,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     break;
                 case ID_PREVIEW_BUTTON:
                     OnPreviewClick();
+                    break;
+                case ID_SELECT_ALL_BUTTON:
+                    for (int i = 0; i < g_app.fileCount; i++) {
+                        g_app.files[i].isSelected = true;
+                        ListView_SetCheckState(g_app.hwndFileList, i, TRUE);
+                    }
+                    break;
+                case ID_DESELECT_ALL_BUTTON:
+                    for (int i = 0; i < g_app.fileCount; i++) {
+                        g_app.files[i].isSelected = false;
+                        ListView_SetCheckState(g_app.hwndFileList, i, FALSE);
+                    }
                     break;
                 case ID_ORGANIZE_CHECK:
                     // Auto-update preview when organize checkbox changes
