@@ -62,7 +62,11 @@ void ScanDirectory(const wchar_t* path, bool recursive) {
     int stackCapacity = 256;
     int stackSize = 0;
     DirectoryEntry* dirStack = (DirectoryEntry*)malloc(stackCapacity * sizeof(DirectoryEntry));
-    if (!dirStack) return;
+    if (!dirStack) {
+        // Out of memory - log error and return
+        SetWindowTextW(g_app.hwndStatusText, L"Error: Out of memory during scan");
+        return;
+    }
     
     // Push initial directory
     wcsncpy_s(dirStack[stackSize].path, MAX_PATH_LEN, path, _TRUNCATE);

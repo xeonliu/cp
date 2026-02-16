@@ -264,7 +264,12 @@ void FreeTreeItemRecursive(HTREEITEM hItem) {
     int stackCapacity = 256;
     int stackSize = 0;
     HTREEITEM* itemStack = (HTREEITEM*)malloc(stackCapacity * sizeof(HTREEITEM));
-    if (!itemStack) return;
+    if (!itemStack) {
+        // Out of memory - cannot clean up properly
+        // Log error (this is called during cleanup, so just skip)
+        OutputDebugStringW(L"FreeTreeItemRecursive: malloc failed, memory leak possible\n");
+        return;
+    }
     
     // Push initial item
     itemStack[stackSize++] = hItem;
