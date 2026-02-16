@@ -23,7 +23,7 @@ bool IsSupportedFile(const wchar_t* filename) {
     const wchar_t* ext = wcsrchr(filename, L'.');
     if (ext == NULL) return false;
 
-    for (int i = 0; i < SUPPORTED_EXTENSIONS[i] != NULL; i++) {
+    for (int i = 0; SUPPORTED_EXTENSIONS[i] != NULL; i++) {
         if (_wcsicmp(ext, SUPPORTED_EXTENSIONS[i]) == 0) {
             return true;
         }
@@ -261,11 +261,15 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
     // Update file list view
     ListView_DeleteAllItems(g_app.hwndFileList);
     
+    g_app.suppressPreviewOnCheck = true;
+    
     EnterCriticalSection(&g_app.csFiles);
     for (int i = 0; i < g_app.fileCount; i++) {
         const wchar_t* filename = wcsrchr(g_app.files[i].path, L'\\');
         if (filename) filename++;
         else filename = g_app.files[i].path;
+        
+        g_app.files[i].isSelected = true;
         
         LVITEMW lvi = {0};
         lvi.mask = LVIF_TEXT | LVIF_PARAM;
@@ -275,10 +279,11 @@ DWORD WINAPI ScanThread(LPVOID lpParam) {
         lvi.lParam = i;  // Store file index
         ListView_InsertItem(g_app.hwndFileList, &lvi);
         
-        // Set checkbox state based on isSelected
-        ListView_SetCheckState(g_app.hwndFileList, i, g_app.files[i].isSelected);
+        ListView_SetCheckState(g_app.hwndFileList, i, TRUE);
     }
     LeaveCriticalSection(&g_app.csFiles);
+    
+    g_app.suppressPreviewOnCheck = false;
     
     // Update status (allocate string for async update)
     wchar_t* statusText = (wchar_t*)malloc(256 * sizeof(wchar_t));

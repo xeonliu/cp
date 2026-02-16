@@ -164,7 +164,7 @@ void CreateUI(HWND hwnd) {
     lvc.cx = 150;
     ListView_InsertColumn(g_app.hwndFileList, 0, &lvc);
     
-    // Select All / Deselect All buttons
+    // Select All / Deselect All buttons (below file list)
     y += 395;
     HWND hSelectAllBtn = CreateWindowW(L"BUTTON", L"All",
                                        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
@@ -176,13 +176,14 @@ void CreateUI(HWND hwnd) {
                                          405, y, 85, 25, hwnd, (HMENU)ID_DESELECT_ALL_BUTTON, NULL, NULL);
     SendMessage(hDeselectAllBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
     
-    // Preview tree
+    // Preview tree aligned with file list (middle column)
+    int previewY = 10;
     CreateWindowW(L"STATIC", L"Preview Structure:", WS_VISIBLE | WS_CHILD,
-                 500, y, 200, 25, hwnd, NULL, NULL, NULL);
+                 500, previewY, 200, 25, hwnd, NULL, NULL, NULL);
     
     g_app.hwndPreviewTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEW, L"",
                                             WS_VISIBLE | WS_CHILD | WS_BORDER | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS,
-                                            500, y + 30, 210, 400, hwnd, (HMENU)ID_PREVIEW_TREE, NULL, NULL);
+                                            500, previewY + 30, 210, 360, hwnd, (HMENU)ID_PREVIEW_TREE, NULL, NULL);
     SendMessage(g_app.hwndPreviewTree, WM_SETFONT, (WPARAM)hFont, TRUE);
     
     // Target section
@@ -533,6 +534,11 @@ void UpdatePreviewTree() {
     
     for (int i = 0; i < g_app.fileCount; i++) {
         FileInfo* file = &g_app.files[i];
+        
+        if (!file->isSelected) {
+            continue;
+        }
+        
         wchar_t folderPath[MAX_PATH_LEN];
         
         if (organizeByDate) {
@@ -636,15 +642,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 }
             }
             
-            // Handle ListView checkbox changes
             if (pnmhdr->idFrom == ID_FILE_LIST && pnmhdr->code == LVN_ITEMCHANGED) {
                 LPNMLISTVIEW pnmlv = (LPNMLISTVIEW)lParam;
                 if ((pnmlv->uChanged & LVIF_STATE) && 
                     ((pnmlv->uOldState & LVIS_STATEIMAGEMASK) != (pnmlv->uNewState & LVIS_STATEIMAGEMASK))) {
-                    // Checkbox state changed
                     int fileIndex = (int)pnmlv->lParam;
                     if (fileIndex >= 0 && fileIndex < g_app.fileCount) {
-                        g_app.files[fileIndex].isSelected = ListView_GetCheckState(g_app.hwndFileList, pnmlv->iItem) ? true : false;
+                        g_app.files[fileIndex].isSelected =
+                            ListView_GetCheckState(g_app.hwndFileList, pnmlv->iItem) ? true : false;
+                        if (!g_app.suppressPreviewOnCheck) {
+                            UpdatePreviewTree();
+                        }
                     }
                 }
             }
@@ -666,20 +674,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     OnPreviewClick();
                     break;
                 case ID_SELECT_ALL_BUTTON:
+                    g_app.suppressPreviewOnCheck = true;
                     EnterCriticalSection(&g_app.csFiles);
                     for (int i = 0; i < g_app.fileCount; i++) {
                         g_app.files[i].isSelected = true;
                         ListView_SetCheckState(g_app.hwndFileList, i, TRUE);
                     }
                     LeaveCriticalSection(&g_app.csFiles);
+                    g_app.suppressPreviewOnCheck = false;
+                    UpdatePreviewTree();
                     break;
                 case ID_DESELECT_ALL_BUTTON:
+                    g_app.suppressPreviewOnCheck = true;
                     EnterCriticalSection(&g_app.csFiles);
                     for (int i = 0; i < g_app.fileCount; i++) {
                         g_app.files[i].isSelected = false;
                         ListView_SetCheckState(g_app.hwndFileList, i, FALSE);
                     }
                     LeaveCriticalSection(&g_app.csFiles);
+                    g_app.suppressPreviewOnCheck = false;
+                    UpdatePreviewTree();
                     break;
                 case ID_ORGANIZE_CHECK:
                     // Auto-update preview when organize checkbox changes

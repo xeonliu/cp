@@ -94,6 +94,7 @@ typedef struct {
     bool isMoving;
     bool useExifDate;  // Use EXIF date for Win7+
     int dateFormatIndex;
+    bool suppressPreviewOnCheck;
     
     // Import progress tracking
     wchar_t currentFile[MAX_PATH_LEN];
