@@ -259,21 +259,51 @@ void CreateUI(HWND hwnd) {
 void FreeTreeItemRecursive(HTREEITEM hItem) {
     if (!hItem) return;
     
-    // Free all children first (recursive)
-    HTREEITEM hChild = TreeView_GetChild(g_app.hwndSourceTree, hItem);
-    while (hChild) {
-        HTREEITEM hNextChild = TreeView_GetNextSibling(g_app.hwndSourceTree, hChild);
-        FreeTreeItemRecursive(hChild);
-        hChild = hNextChild;
+    // Use iterative approach with manual stack to avoid stack overflow on deep trees
+    // Allocate item stack on heap (initial capacity: 256 items)
+    int stackCapacity = 256;
+    int stackSize = 0;
+    HTREEITEM* itemStack = (HTREEITEM*)malloc(stackCapacity * sizeof(HTREEITEM));
+    if (!itemStack) return;
+    
+    // Push initial item
+    itemStack[stackSize++] = hItem;
+    
+    // Process items iteratively (depth-first)
+    while (stackSize > 0) {
+        // Pop item from stack
+        HTREEITEM currentItem = itemStack[--stackSize];
+        
+        // Push all children to stack (process children before freeing parent)
+        HTREEITEM hChild = TreeView_GetChild(g_app.hwndSourceTree, currentItem);
+        while (hChild) {
+            // Expand stack if needed
+            if (stackSize >= stackCapacity) {
+                int newCapacity = stackCapacity * 2;
+                HTREEITEM* newStack = (HTREEITEM*)realloc(itemStack, newCapacity * sizeof(HTREEITEM));
+                if (newStack) {
+                    itemStack = newStack;
+                    stackCapacity = newCapacity;
+                } else {
+                    // Out of memory - free what we can
+                    break;
+                }
+            }
+            
+            itemStack[stackSize++] = hChild;
+            hChild = TreeView_GetNextSibling(g_app.hwndSourceTree, hChild);
+        }
+        
+        // Free this item's data
+        TVITEMW tvi;
+        tvi.mask = TVIF_PARAM;
+        tvi.hItem = currentItem;
+        if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
+            free((TreeItemData*)tvi.lParam);
+        }
     }
     
-    // Free this item's data
-    TVITEMW tvi;
-    tvi.mask = TVIF_PARAM;
-    tvi.hItem = hItem;
-    if (TreeView_GetItem(g_app.hwndSourceTree, &tvi) && tvi.lParam) {
-        free((TreeItemData*)tvi.lParam);
-    }
+    free(itemStack);
 }
 
 void PopulateTreeChildren(HTREEITEM hParent) {

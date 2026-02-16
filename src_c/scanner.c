@@ -51,40 +51,81 @@ void AddFile(const wchar_t* filepath, const WIN32_FIND_DATAW* findData) {
     SetWindowTextW(g_app.hwndStatusText, L"Scanning...");
 }
 
+// Directory entry for iterative traversal (avoids stack overflow)
+typedef struct {
+    wchar_t path[MAX_PATH_LEN];
+} DirectoryEntry;
+
 void ScanDirectory(const wchar_t* path, bool recursive) {
-    wchar_t searchPath[MAX_PATH_LEN];
-    swprintf_s(searchPath, MAX_PATH_LEN, L"%s\\*", path);
+    // Use iterative approach with manual stack to avoid stack overflow
+    // Allocate directory stack on heap (initial capacity: 256 directories)
+    int stackCapacity = 256;
+    int stackSize = 0;
+    DirectoryEntry* dirStack = (DirectoryEntry*)malloc(stackCapacity * sizeof(DirectoryEntry));
+    if (!dirStack) return;
     
-    WIN32_FIND_DATAW findData;
-    HANDLE hFind = FindFirstFileW(searchPath, &findData);
+    // Push initial directory
+    wcsncpy_s(dirStack[stackSize].path, MAX_PATH_LEN, path, _TRUNCATE);
+    stackSize++;
     
-    if (hFind == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    
-    do {
-        if (g_app.stopRequested) break;
+    // Process directories iteratively
+    while (stackSize > 0 && !g_app.stopRequested) {
+        // Pop directory from stack
+        stackSize--;
+        wchar_t currentPath[MAX_PATH_LEN];
+        wcsncpy_s(currentPath, MAX_PATH_LEN, dirStack[stackSize].path, _TRUNCATE);
         
-        // Skip "." and ".."
-        if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+        // Build search path
+        wchar_t searchPath[MAX_PATH_LEN];
+        swprintf_s(searchPath, MAX_PATH_LEN, L"%s\\*", currentPath);
+        
+        WIN32_FIND_DATAW findData;
+        HANDLE hFind = FindFirstFileW(searchPath, &findData);
+        
+        if (hFind == INVALID_HANDLE_VALUE) {
             continue;
         }
         
-        wchar_t fullPath[MAX_PATH_LEN];
-        swprintf_s(fullPath, MAX_PATH_LEN, L"%s\\%s", path, findData.cFileName);
+        do {
+            if (g_app.stopRequested) break;
+            
+            // Skip "." and ".."
+            if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+                continue;
+            }
+            
+            wchar_t fullPath[MAX_PATH_LEN];
+            swprintf_s(fullPath, MAX_PATH_LEN, L"%s\\%s", currentPath, findData.cFileName);
+            
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (recursive) {
+                    // Push subdirectory to stack
+                    if (stackSize >= stackCapacity) {
+                        // Expand stack capacity
+                        int newCapacity = stackCapacity * 2;
+                        DirectoryEntry* newStack = (DirectoryEntry*)realloc(dirStack, newCapacity * sizeof(DirectoryEntry));
+                        if (newStack) {
+                            dirStack = newStack;
+                            stackCapacity = newCapacity;
+                        } else {
+                            // Out of memory - continue with current directories
+                            break;
+                        }
+                    }
+                    wcsncpy_s(dirStack[stackSize].path, MAX_PATH_LEN, fullPath, _TRUNCATE);
+                    stackSize++;
+                }
+            } else {
+                if (IsSupportedFile(findData.cFileName)) {
+                    AddFile(fullPath, &findData);
+                }
+            }
+        } while (FindNextFileW(hFind, &findData));
         
-        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (recursive) {
-                ScanDirectory(fullPath, recursive);
-            }
-        } else {
-            if (IsSupportedFile(findData.cFileName)) {
-                AddFile(fullPath, &findData);
-            }
-        }
-    } while (FindNextFileW(hFind, &findData));
+        FindClose(hFind);
+    }
     
-    FindClose(hFind);
+    free(dirStack);
 }
 
 DWORD WINAPI ScanThread(LPVOID lpParam) {
